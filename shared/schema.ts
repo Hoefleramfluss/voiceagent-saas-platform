@@ -22,6 +22,7 @@ export const usageEventKindEnum = pgEnum('usage_event_kind', ['call', 'minute', 
 export const invoiceStatusEnum = pgEnum('invoice_status', ['pending', 'paid', 'failed', 'cancelled']);
 export const supportTicketStatusEnum = pgEnum('support_ticket_status', ['open', 'in_progress', 'resolved', 'closed']);
 export const provisioningJobStatusEnum = pgEnum('provisioning_job_status', ['queued', 'in_progress', 'done', 'error']);
+export const apiKeyServiceTypeEnum = pgEnum('api_key_service_type', ['stripe', 'openai', 'twilio', 'google', 'elevenlabs', 'heroku']);
 
 // Tenants table
 export const tenants = pgTable("tenants", {
@@ -126,6 +127,18 @@ export const provisioningJobs = pgTable("provisioning_jobs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
 
+// API keys table
+export const apiKeys = pgTable("api_keys", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  keyName: varchar("key_name", { length: 100 }).notNull().unique(),
+  keyValue: text("key_value").notNull(),
+  serviceType: apiKeyServiceTypeEnum("service_type").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   users: many(users),
@@ -218,6 +231,12 @@ export const insertProvisioningJobSchema = createInsertSchema(provisioningJobs).
   updatedAt: true
 });
 
+export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
@@ -231,3 +250,5 @@ export type SupportTicket = typeof supportTickets.$inferSelect;
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
 export type ProvisioningJob = typeof provisioningJobs.$inferSelect;
 export type InsertProvisioningJob = z.infer<typeof insertProvisioningJobSchema>;
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
