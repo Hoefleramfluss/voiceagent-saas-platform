@@ -9,6 +9,7 @@ import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
 import { keyLoader, getStripeKey, getStripeWebhookSecret, invalidateKeyCache } from "./key-loader";
 import { billingCalculator } from "./billing-calculator";
+import { enhancedBillingCalculator } from "./enhanced-billing-calculator";
 import { stripeInvoiceService } from "./stripe-invoice-service";
 import { stripeWebhookService } from "./stripe-webhook-service";
 import { 
@@ -648,10 +649,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Tenant ID required" });
       }
 
-      const usageAndCosts = await billingCalculator.getCurrentUsageAndCosts(user.tenantId);
-      res.json(usageAndCosts);
+      // Use enhanced billing calculator for subscription-aware billing
+      const result = await enhancedBillingCalculator.getEnhancedCurrentUsageAndCosts(user.tenantId);
+      
+      // Transform the result to match expected API format with enhanced data
+      const response = {
+        totalCostCents: result.totalCostCents,
+        lineItems: result.billing.lineItems.map(item => ({
+          kind: item.kind,
+          quantity: item.quantity,
+          totalAmountCents: item.totalAmountCents,
+          name: item.name,
+          description: item.description,
+          freeAllowance: item.freeAllowance,
+          usedFromFree: item.usedFromFree
+        })),
+        periodStart: result.billing.periodStart.toISOString(),
+        periodEnd: result.billing.periodEnd.toISOString(),
+        subscriptionPlan: result.billing.subscriptionPlan,
+        minuteBreakdown: result.billing.minuteBreakdown
+      };
+      
+      res.json(response);
     } catch (error) {
-      console.error('[Billing] Current usage error:', error);
+      console.error('[Billing] Enhanced usage error:', error);
       res.status(500).json({ message: (error as Error).message });
     }
   });
