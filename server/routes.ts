@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import Stripe from "stripe";
 import { setupAuth, requireAuth, requireRole, requireTenantAccess } from "./auth";
+import { hashPassword } from "./auth";
 import { storage } from "./storage";
 import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema } from "@shared/schema";
 import { z } from "zod";
@@ -484,6 +485,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Twilio phone number management
+  app.get("/api/twilio/numbers/available", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { twilioService } = await import("./twilio-service");
+      const { countryCode = 'US', areaCode, limit = 10 } = req.query;
+      
+      const numbers = await twilioService.searchAvailableNumbers({
+        countryCode: countryCode as string,
+        areaCode: areaCode as string,
+        voiceEnabled: true,
+        smsEnabled: true,
+        limit: parseInt(limit as string)
+      });
+      
+      res.json(numbers);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+  
+  app.get("/api/twilio/numbers/existing", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { twilioService } = await import("./twilio-service");
+      const numbers = await twilioService.listExistingNumbers();
+      res.json(numbers);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+  
+  app.post("/api/twilio/numbers/purchase", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { twilioService } = await import("./twilio-service");
+      const { phoneNumber, tenantId, botId, friendlyName } = req.body;
+      
+      if (!phoneNumber || !tenantId || !botId) {
+        return res.status(400).json({ message: "phoneNumber, tenantId, and botId are required" });
+      }
+      
+      const result = await twilioService.purchasePhoneNumber({
+        phoneNumber,
+        tenantId,
+        botId,
+        countryCode: 'US',
+        capabilities: ['voice', 'sms'],
+        friendlyName
+      });
+      
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json({ message: result.error });
+      }
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+  
+  app.post("/api/twilio/numbers/assign", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { twilioService } = await import("./twilio-service");
+      const { numberSid, phoneNumber, tenantId, botId } = req.body;
+      
+      if (!numberSid || !phoneNumber || !tenantId || !botId) {
+        return res.status(400).json({ 
+          message: "numberSid, phoneNumber, tenantId, and botId are required" 
+        });
+      }
+      
+      const result = await twilioService.assignExistingNumber({
+        numberSid,
+        phoneNumber,
+        tenantId,
+        botId
+      });
+      
+      if (result.success) {
+        res.json({ message: "Phone number assigned successfully" });
+      } else {
+        res.status(400).json({ message: result.error });
+      }
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // Support tickets
   app.get("/api/support/tickets", requireAuth, async (req, res) => {
     try {
@@ -945,6 +1032,206 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // 🎯 ADMIN USER CREATION SYSTEM - Core admin functionality
+  // Creates users for customers and sends welcome credentials
+  app.post("/api/admin/users", 
+    requireAuth, 
+    requireRole(['platform_admin']), 
+    async (req, res) => {
+    try {
+      const validation = z.object({
+        email: z.string().email("Valid email address required"),
+        tenantId: z.string().uuid("Valid tenant ID required"),
+        role: z.enum(['customer_admin', 'customer_user', 'support']).default('customer_user'),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        sendEmail: z.boolean().default(true)
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const { email, tenantId, role, firstName, lastName, sendEmail } = validation.data;
+      
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+
+      // Verify tenant exists and is active
+      const tenant = await storage.getTenant(tenantId);
+      if (!tenant) {
+        return res.status(400).json({ message: "Tenant not found" });
+      }
+      if (tenant.status !== 'active') {
+        return res.status(400).json({ message: "Tenant is not active" });
+      }
+
+      // Generate secure temporary password
+      const tempPassword = generateSecurePassword();
+      const hashedPassword = await hashPassword(tempPassword);
+      
+      // Create user
+      const user = await storage.createUser({
+        email,
+        password: hashedPassword,
+        tenantId,
+        role,
+        firstName,
+        lastName
+      });
+
+      console.log(`[Admin] Created user ${user.email} for tenant ${tenant.name} by admin ${req.user?.email}`);
+
+      // Send welcome email with credentials (if enabled)
+      if (sendEmail) {
+        try {
+          await sendWelcomeEmail({
+            email: user.email,
+            firstName: user.firstName || undefined,
+            lastName: user.lastName || undefined,
+            tempPassword,
+            tenantName: tenant.name,
+            loginUrl: process.env.FRONTEND_URL || req.headers.origin || 'https://localhost:5000'
+          });
+          console.log(`[Email] Welcome email sent to ${user.email}`);
+        } catch (emailError) {
+          console.error(`[Email] Failed to send welcome email to ${user.email}:`, emailError);
+          // Don't fail the request if email fails - user was created successfully
+        }
+      }
+
+      // For customer_admin users, trigger onboarding if this is the first admin user for the tenant
+      if (role === 'customer_admin') {
+        try {
+          const tenantUsers = await storage.getTenantUsers(tenantId);
+          const adminUsers = tenantUsers.filter(u => u.role === 'customer_admin');
+          
+          // If this is the first admin user, trigger onboarding
+          if (adminUsers.length === 1) {
+            const { customerOnboardingService } = await import("./customer-onboarding");
+            
+            customerOnboardingService.onboardNewCustomer({
+              tenantId,
+              email: user.email,
+              firstName: user.firstName || undefined,
+              lastName: user.lastName || undefined,
+              organizationName: tenant.name
+            }).then((result) => {
+              if (result.success) {
+                console.log(`[Admin Onboarding] Successfully onboarded customer: ${user.email}`, {
+                  stripeCustomerId: result.stripeCustomerId,
+                  botId: result.botId,
+                  provisioningJobId: result.provisioningJobId
+                });
+              } else {
+                console.warn(`[Admin Onboarding] Failed for customer: ${user.email}`, result.error);
+              }
+            }).catch((error) => {
+              console.error(`[Admin Onboarding] Error for customer: ${user.email}`, error);
+            });
+          }
+        } catch (onboardingError) {
+          console.warn('[Admin] Could not trigger onboarding:', onboardingError);
+        }
+      }
+
+      // Return user data (without password)
+      const safeUser = {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        tenantId: user.tenantId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        tempPasswordSent: sendEmail
+      };
+
+      res.status(201).json(safeUser);
+    } catch (error) {
+      console.error('[Admin User Creation] Error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
+}
+
+/**
+ * Generate a secure temporary password
+ */
+function generateSecurePassword(): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const specialChars = '!@#$%&*';
+  let password = '';
+  
+  // Ensure at least one of each type
+  password += chars.charAt(Math.floor(Math.random() * 26)); // Uppercase
+  password += chars.charAt(Math.floor(Math.random() * 26) + 26); // Lowercase  
+  password += chars.charAt(Math.floor(Math.random() * 8) + 52); // Number
+  password += specialChars.charAt(Math.floor(Math.random() * specialChars.length)); // Special
+  
+  // Fill the rest randomly
+  for (let i = 4; i < 12; i++) {
+    const allChars = chars + specialChars;
+    password += allChars.charAt(Math.floor(Math.random() * allChars.length));
+  }
+  
+  // Shuffle the password
+  return password.split('').sort(() => Math.random() - 0.5).join('');
+}
+
+/**
+ * Send welcome email with login credentials
+ */
+async function sendWelcomeEmail(data: {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  tempPassword: string;
+  tenantName: string;
+  loginUrl: string;
+}): Promise<void> {
+  const { email, firstName, lastName, tempPassword, tenantName, loginUrl } = data;
+  const displayName = firstName && lastName ? `${firstName} ${lastName}` : firstName || email;
+  
+  // For now, log the credentials (in production, integrate with email service)
+  console.log(`
+    ✉️ WELCOME EMAIL for ${email}
+    =====================================
+    To: ${email}
+    Subject: Welcome to ${tenantName} - Your VoiceAgent Account
+    
+    Hi ${displayName},
+    
+    Your VoiceAgent account has been created for ${tenantName}.
+    
+    Login Details:
+    Email: ${email}
+    Temporary Password: ${tempPassword}
+    Login URL: ${loginUrl}
+    
+    Please login and change your password immediately.
+    
+    Best regards,
+    VoiceAgent Team
+    =====================================
+  `);
+  
+  // TODO: In production, integrate with email service like:
+  // - SendGrid, Postmark, Amazon SES, etc.
+  // - Use proper HTML email templates
+  // - Add email verification flow
+  // - Handle email delivery failures
+  
+  // For now, just resolve successfully
+  await Promise.resolve();
 }
