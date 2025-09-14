@@ -56,35 +56,104 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  const server = await registerRoutes(app);
+  try {
+    console.log(`[STARTUP] Starting VoiceAgent SaaS Platform in ${process.env.NODE_ENV || 'development'} mode`);
+    console.log(`[STARTUP] Process ID: ${process.pid}`);
+    console.log(`[STARTUP] Node version: ${process.version}`);
+    
+    const server = await registerRoutes(app);
+    console.log(`[STARTUP] Routes registered successfully`);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+      const status = err.status || err.statusCode || 500;
+      const message = err.message || "Internal Server Error";
+      
+      // Log error details for debugging without crashing the server
+      console.error(`[ERROR] ${status}: ${message}`);
+      console.error(`[ERROR] Request: ${req.method} ${req.path}`);
+      if (process.env.NODE_ENV === 'development') {
+        console.error(`[ERROR] Stack:`, err.stack);
+      }
+      
+      // Send error response without crashing the server
+      if (!res.headersSent) {
+        res.status(status).json({ message });
+      }
+    });
 
-    res.status(status).json({ message });
-    throw err;
-  });
+    // Setup Vite in development or serve static files in production
+    if (app.get("env") === "development") {
+      console.log(`[STARTUP] Setting up Vite development server`);
+      await setupVite(app, server);
+      console.log(`[STARTUP] Vite development server configured`);
+    } else {
+      console.log(`[STARTUP] Setting up static file serving for production`);
+      try {
+        serveStatic(app);
+        console.log(`[STARTUP] Static file serving configured`);
+      } catch (staticError) {
+        console.error(`[STARTUP] CRITICAL: Static file serving failed:`, staticError);
+        throw staticError;
+      }
+    }
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (app.get("env") === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
+    // Configure server to listen on correct host/port for deployment
+    const port = parseInt(process.env.PORT || '5000', 10);
+    const host = process.env.HOST || "0.0.0.0";
+    
+    console.log(`[STARTUP] Attempting to listen on ${host}:${port}`);
+    
+    server.listen({
+      port,
+      host,
+      reusePort: true,
+    }, () => {
+      console.log(`[STARTUP] ✅ VoiceAgent SaaS Platform successfully started!`);
+      console.log(`[STARTUP] 🚀 Server listening on http://${host}:${port}`);
+      console.log(`[STARTUP] Environment: ${process.env.NODE_ENV || 'development'}`);
+      log(`serving on port ${port}`);
+    });
+    
+    // Handle server errors
+    server.on('error', (error: any) => {
+      console.error(`[STARTUP] ❌ Server error:`, error);
+      if (error.code === 'EADDRINUSE') {
+        console.error(`[STARTUP] Port ${port} is already in use!`);
+      } else if (error.code === 'EACCES') {
+        console.error(`[STARTUP] Permission denied to bind to port ${port}`);
+      }
+      process.exit(1);
+    });
+
+  } catch (startupError) {
+    console.error(`[STARTUP] ❌ Critical startup error:`, startupError);
+    console.error(`[STARTUP] Stack trace:`, startupError instanceof Error ? startupError.stack : 'No stack trace available');
+    
+    // Log environment info for debugging
+    console.error(`[DEBUG] NODE_ENV: ${process.env.NODE_ENV}`);
+    console.error(`[DEBUG] PORT: ${process.env.PORT}`);
+    console.error(`[DEBUG] HOST: ${process.env.HOST}`);
+    console.error(`[DEBUG] Working directory: ${process.cwd()}`);
+    
+    process.exit(1);
   }
-
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || '5000', 10);
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
-  });
 })();
+
+// Handle unhandled promise rejections and uncaught exceptions
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[PROCESS] Unhandled Promise Rejection:', reason);
+  console.error('[PROCESS] Promise:', promise);
+  // Don't exit in production - log and continue
+  if (process.env.NODE_ENV === 'development') {
+    console.error('[PROCESS] Exiting due to unhandled rejection in development');
+    process.exit(1);
+  }
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[PROCESS] Uncaught Exception:', error);
+  console.error('[PROCESS] Stack:', error.stack);
+  // Exit gracefully on uncaught exceptions
+  console.error('[PROCESS] Exiting due to uncaught exception');
+  process.exit(1);
+});
