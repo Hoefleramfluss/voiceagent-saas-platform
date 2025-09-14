@@ -138,6 +138,34 @@ export function setupAuth(app: Express) {
         lastName
       });
 
+      // 🚀 AUTOMATED CUSTOMER ONBOARDING
+      try {
+        const { customerOnboardingService } = await import("./customer-onboarding");
+        
+        // Run onboarding workflow in background
+        customerOnboardingService.onboardNewCustomer({
+          tenantId: finalTenantId,
+          email,
+          firstName,
+          lastName,
+          organizationName: tenant.name
+        }).then((result) => {
+          if (result.success) {
+            console.log(`[Registration] Successfully onboarded customer: ${email}`, {
+              stripeCustomerId: result.stripeCustomerId,
+              botId: result.botId,
+              provisioningJobId: result.provisioningJobId
+            });
+          } else {
+            console.warn(`[Registration] Onboarding failed for customer: ${email}`, result.error);
+          }
+        }).catch((error) => {
+          console.error(`[Registration] Onboarding error for customer: ${email}`, error);
+        });
+      } catch (error) {
+        console.warn('[Registration] Could not start onboarding workflow:', error);
+      }
+
       req.login(user, (err) => {
         if (err) return next(err);
         
