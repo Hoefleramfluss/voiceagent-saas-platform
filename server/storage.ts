@@ -47,6 +47,7 @@ export interface IStorage {
   getTenants(): Promise<Tenant[]>;
   getTenant(id: string): Promise<Tenant | undefined>;
   createTenant(tenant: InsertTenant): Promise<Tenant>;
+  updateTenant(id: string, updates: Partial<Tenant>): Promise<Tenant>;
   getTenantUsers(tenantId: string): Promise<User[]>;
 
   // Bot operations
@@ -149,6 +150,15 @@ export class DatabaseStorage implements IStorage {
     const [tenant] = await db
       .insert(tenants)
       .values(insertTenant)
+      .returning();
+    return tenant;
+  }
+
+  async updateTenant(id: string, updates: Partial<Tenant>): Promise<Tenant> {
+    const [tenant] = await db
+      .update(tenants)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(tenants.id, id))
       .returning();
     return tenant;
   }
