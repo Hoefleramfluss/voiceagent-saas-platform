@@ -134,22 +134,37 @@ async function testEnvironmentVariables(): Promise<SmokeTestResult> {
   const startTime = Date.now();
   
   try {
+    // Only truly critical variables that prevent app startup should cause FAIL
     const criticalEnvVars = [
       'NODE_ENV',
-      'DATABASE_URL',
+      'DATABASE_URL'
+    ];
+    
+    // Optional service variables that should only cause WARN
+    const optionalEnvVars = [
       'STRIPE_SECRET_KEY',
       'SENDGRID_API_KEY',
       'TWILIO_ACCOUNT_SID',
       'TWILIO_AUTH_TOKEN'
     ];
     
-    const missingVars = criticalEnvVars.filter(envVar => !process.env[envVar]);
+    const missingCritical = criticalEnvVars.filter(envVar => !process.env[envVar]);
+    const missingOptional = optionalEnvVars.filter(envVar => !process.env[envVar]);
     
-    if (missingVars.length > 0) {
+    if (missingCritical.length > 0) {
       return {
         test: 'Environment Variables',
         status: 'FAIL',
-        message: `Missing: ${missingVars.join(', ')}`,
+        message: `Missing critical: ${missingCritical.join(', ')}`,
+        duration: Date.now() - startTime
+      };
+    }
+    
+    if (missingOptional.length > 0) {
+      return {
+        test: 'Environment Variables',
+        status: 'WARN',
+        message: `Missing optional services: ${missingOptional.join(', ')} - some features may be disabled`,
         duration: Date.now() - startTime
       };
     }
