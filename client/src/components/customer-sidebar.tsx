@@ -15,13 +15,13 @@ import {
 
 const getNavigation = (t: any) => [
   { name: t('overview'), href: "/", icon: BarChart },
-  { name: t('usage') + " & Analytik", href: "/usage", icon: Phone },
-  { name: t('billing') + " & Rechnungen", href: "/billing", icon: Receipt },
+  { name: t('usageAnalytics'), href: "/usage", icon: Phone },
+  { name: t('billingInvoices'), href: "/billing", icon: Receipt },
   { name: t('support'), href: "/support", icon: Headphones },
 ];
 
 const getAccountNavigation = (t: any) => [
-  { name: "Profil-" + t('settings'), href: "/profile", icon: User },
+  { name: t('profileSettings'), href: "/profile", icon: User },
   { name: t('apiKeys'), href: "/api-keys", icon: Key },
 ];
 
