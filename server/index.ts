@@ -131,6 +131,23 @@ app.use((req, res, next) => {
       }
     }
 
+    // Run deployment smoke tests to verify system readiness
+    if (process.env.NODE_ENV === 'production' || process.env.RUN_SMOKE_TESTS === 'true') {
+      try {
+        console.log(`[STARTUP] Running deployment smoke tests...`);
+        const { runDeploymentSmokeTests } = await import('./smoke-tests');
+        await runDeploymentSmokeTests();
+        console.log(`[STARTUP] ✅ All smoke tests passed - system ready for deployment`);
+      } catch (smokeTestError) {
+        console.error(`[STARTUP] ❌ Smoke tests failed:`, smokeTestError);
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error(`Deployment smoke tests failed: ${smokeTestError}`);
+        } else {
+          console.warn(`[STARTUP] ⚠️ Continuing in development despite smoke test failures`);
+        }
+      }
+    }
+
     // Configure server to listen on correct host/port for deployment
     const port = parseInt(process.env.PORT || '5000', 10);
     const host = process.env.HOST || "0.0.0.0";
