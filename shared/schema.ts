@@ -24,6 +24,8 @@ export const supportTicketStatusEnum = pgEnum('support_ticket_status', ['open', 
 export const provisioningJobStatusEnum = pgEnum('provisioning_job_status', ['queued', 'in_progress', 'done', 'error']);
 export const apiKeyServiceTypeEnum = pgEnum('api_key_service_type', ['stripe', 'openai', 'twilio', 'google', 'elevenlabs', 'heroku']);
 export const auditEventTypeEnum = pgEnum('audit_event_type', ['api_key_created', 'api_key_deleted', 'user_login', 'user_logout', 'password_change', 'role_change', 'sensitive_operation']);
+export const subscriptionPlanStatusEnum = pgEnum('subscription_plan_status', ['active', 'inactive', 'deprecated']);
+export const subscriptionStatusEnum = pgEnum('subscription_status', ['active', 'paused', 'canceled', 'expired']);
 
 // Tenants table
 export const tenants = pgTable("tenants", {
@@ -78,11 +80,34 @@ export const usageEvents = pgTable("usage_events", {
   timestamp: timestamp("timestamp").defaultNow().notNull()
 });
 
+// Subscription plans table
+export const subscriptionPlans = pgTable("subscription_plans", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description"),
+  monthlyPriceEur: decimal("monthly_price_eur").notNull(),
+  yearlyPriceEur: decimal("yearly_price_eur"),
+  features: jsonb("features").notNull(), // Array of feature strings
+  limits: jsonb("limits").notNull(), // Usage limits object
+  stripePriceId: varchar("stripe_price_id", { length: 255 }),
+  stripeProductId: varchar("stripe_product_id", { length: 255 }),
+  status: subscriptionPlanStatusEnum("status").notNull().default('active'),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
 // Billing accounts table
 export const billingAccounts = pgTable("billing_accounts", {
   tenantId: uuid("tenant_id").primaryKey().references(() => tenants.id),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }).notNull(),
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+  currentPlanId: uuid("current_plan_id").references(() => subscriptionPlans.id),
+  subscriptionStatus: subscriptionStatusEnum("subscription_status").default('active'),
+  subscriptionStartDate: timestamp("subscription_start_date"),
+  subscriptionEndDate: timestamp("subscription_end_date"),
+  paymentMethodId: varchar("payment_method_id", { length: 255 }),
+  nextBillingDate: timestamp("next_billing_date"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
