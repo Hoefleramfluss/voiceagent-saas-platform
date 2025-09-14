@@ -81,8 +81,33 @@ class SecureKeyLoader {
    * Get Stripe secret key
    */
   async getStripeKey(): Promise<string | null> {
-    return this.getApiKey('stripe', 'STRIPE_SECRET_KEY') || 
-           this.getApiKey('stripe'); // Fallback to any Stripe key
+    // Only use secret keys for server-side operations
+    const secretKey = await this.getApiKey('stripe', 'STRIPE_SECRET_KEY');
+    if (secretKey) {
+      const keyPrefix = secretKey.substring(0, 7);
+      
+      if (keyPrefix.startsWith('sk_')) {
+        console.log('[KeyLoader] ✅ Using valid Stripe secret key from database');
+        return secretKey;
+      } else {
+        console.warn(`[KeyLoader] Database STRIPE_SECRET_KEY has invalid format (${keyPrefix}), using environment fallback`);
+      }
+    }
+    
+    // Fallback to environment variable (must be secret key)
+    if (process.env.STRIPE_SECRET_KEY) {
+      const envKeyPrefix = process.env.STRIPE_SECRET_KEY.substring(0, 7);
+      
+      if (envKeyPrefix.startsWith('sk_')) {
+        console.log('[KeyLoader] ✅ Using valid Stripe secret key from environment');
+        return process.env.STRIPE_SECRET_KEY;
+      } else {
+        console.error(`[KeyLoader] ❌ Environment STRIPE_SECRET_KEY is not a secret key: ${envKeyPrefix}`);
+      }
+    }
+    
+    console.error('[KeyLoader] ❌ No valid Stripe secret key found in database or environment');
+    return null;
   }
 
   /**
