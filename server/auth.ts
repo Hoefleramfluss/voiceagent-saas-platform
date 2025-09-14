@@ -7,6 +7,7 @@ import { promisify } from "util";
 import { storage } from "./storage";
 import { User as SelectUser, insertUserSchema } from "@shared/schema";
 import { z } from "zod";
+import { loginRateLimit } from "./security-controls";
 
 declare global {
   namespace Express {
@@ -34,7 +35,10 @@ const loginSchema = z.object({
   password: z.string().min(6)
 });
 
-const registerSchema = insertUserSchema.extend({
+const registerSchema = z.object({
+  email: z.string().email(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
   password: z.string().min(6),
   confirmPassword: z.string().min(6)
 }).refine(data => data.password === data.confirmPassword, {
@@ -51,6 +55,7 @@ export function setupAuth(app: Express) {
     cookie: {
       secure: process.env.NODE_ENV === 'production',
       httpOnly: true,
+      sameSite: 'lax', // CSRF Protection: Prevent cross-site request forgery
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
   };
@@ -103,7 +108,7 @@ export function setupAuth(app: Express) {
         });
       }
 
-      const { email, password, tenantId, role, firstName, lastName } = validation.data;
+      const { email, password, firstName, lastName } = validation.data;
       
       const existingUser = await storage.getUserByEmail(email);
       if (existingUser) {
@@ -111,25 +116,64 @@ export function setupAuth(app: Express) {
       }
 
       const hashedPassword = await hashPassword(password);
+      // SECURITY: Force all self-registration to customer_user role only
+      // Only platform admins can create users with elevated privileges via separate endpoints
+      const userRole = 'customer_user';
+      
+      // For customer users, automatically create a tenant since self-registration always creates new customers
+      let finalTenantId: string;
+      // All self-registered users get a new tenant automatically
+      const tenant = await storage.createTenant({
+        name: `${firstName || email.split('@')[0]}'s Organization`,
+        status: 'active'
+      });
+      finalTenantId = tenant.id;
+      
       const user = await storage.createUser({
         email,
         password: hashedPassword,
-        tenantId,
-        role: role || 'customer_user',
+        tenantId: finalTenantId,
+        role: userRole,
         firstName,
         lastName
       });
 
       req.login(user, (err) => {
         if (err) return next(err);
-        res.status(201).json(user);
+        
+        // SECURITY: Regenerate session to prevent session fixation attacks
+        req.session.regenerate((regenerateErr) => {
+          if (regenerateErr) {
+            console.error('[Security] Session regeneration failed on register:', regenerateErr);
+            return next(regenerateErr);
+          }
+          
+          // Re-authenticate after session regeneration
+          req.login(user, (loginErr) => {
+            if (loginErr) return next(loginErr);
+            
+            // SECURITY: Never return password hash or sensitive data
+            const safeUser = {
+              id: user.id,
+              email: user.email,
+              role: user.role,
+              tenantId: user.tenantId,
+              firstName: user.firstName,
+              lastName: user.lastName,
+              isActive: user.isActive,
+              createdAt: user.createdAt,
+              updatedAt: user.updatedAt
+            };
+            res.status(201).json(safeUser);
+          });
+        });
       });
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/login", (req, res, next) => {
+  app.post("/api/login", loginRateLimit, (req, res, next) => {
     const validation = loginSchema.safeParse(req.body);
     if (!validation.success) {
       return res.status(400).json({ 
@@ -144,7 +188,34 @@ export function setupAuth(app: Express) {
 
       req.login(user, (err) => {
         if (err) return next(err);
-        res.json(user);
+        
+        // SECURITY: Regenerate session to prevent session fixation attacks
+        req.session.regenerate((regenerateErr) => {
+          if (regenerateErr) {
+            console.error('[Security] Session regeneration failed on login:', regenerateErr);
+            return next(regenerateErr);
+          }
+          
+          // Re-authenticate after session regeneration
+          req.login(user, (loginErr) => {
+            if (loginErr) return next(loginErr);
+            
+            // SECURITY: Never return password hash or sensitive data
+            const safeUser = {
+              id: user.id,
+              email: user.email,
+              role: user.role,
+              tenantId: user.tenantId,
+              firstName: user.firstName,
+              lastName: user.lastName,
+              isActive: user.isActive,
+              lastLoginAt: user.lastLoginAt,
+              createdAt: user.createdAt,
+              updatedAt: user.updatedAt
+            };
+            res.json(safeUser);
+          });
+        });
       });
     })(req, res, next);
   });
@@ -158,7 +229,21 @@ export function setupAuth(app: Express) {
 
   app.get("/api/user", (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    res.json(req.user);
+    // SECURITY: Never return password hash or sensitive data
+    const user = req.user as SelectUser;
+    const safeUser = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      tenantId: user.tenantId,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      isActive: user.isActive,
+      lastLoginAt: user.lastLoginAt,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+    res.json(safeUser);
   });
 }
 
