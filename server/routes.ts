@@ -609,6 +609,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const ticket = await storage.createSupportTicket(validation.data);
+      
+      // Send email notification for new support ticket
+      try {
+        const { emailService } = await import('./email-service');
+        await emailService.sendSupportTicketNotification({
+          to: user.email,
+          ticketId: ticket.id,
+          subject: ticket.subject,
+          message: ticket.body,
+          priority: ticket.priority
+        });
+      } catch (emailError) {
+        console.warn(`[SUPPORT] Failed to send email notification for ticket ${ticket.id}:`, emailError);
+        // Don't fail the request if email sending fails
+      }
+      
       res.status(201).json(ticket);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
@@ -1214,38 +1230,13 @@ async function sendWelcomeEmail(data: {
   tenantName: string;
   loginUrl: string;
 }): Promise<void> {
-  const { email, firstName, lastName, tempPassword, tenantName, loginUrl } = data;
-  const displayName = firstName && lastName ? `${firstName} ${lastName}` : firstName || email;
+  const { emailService } = await import('./email-service');
   
-  // For now, log the credentials (in production, integrate with email service)
-  console.log(`
-    ✉️ WELCOME EMAIL for ${email}
-    =====================================
-    To: ${email}
-    Subject: Welcome to ${tenantName} - Your VoiceAgent Account
-    
-    Hi ${displayName},
-    
-    Your VoiceAgent account has been created for ${tenantName}.
-    
-    Login Details:
-    Email: ${email}
-    Temporary Password: ${tempPassword}
-    Login URL: ${loginUrl}
-    
-    Please login and change your password immediately.
-    
-    Best regards,
-    VoiceAgent Team
-    =====================================
-  `);
+  const result = await emailService.sendWelcomeEmail(data);
   
-  // TODO: In production, integrate with email service like:
-  // - SendGrid, Postmark, Amazon SES, etc.
-  // - Use proper HTML email templates
-  // - Add email verification flow
-  // - Handle email delivery failures
-  
-  // For now, just resolve successfully
-  await Promise.resolve();
+  if (!result.success) {
+    console.warn(`[WELCOME EMAIL] Failed to send to ${data.email}: ${result.error}`);
+    // Don't throw error - email failure shouldn't block user creation
+    // The email service will fallback to console logging if SendGrid fails
+  }
 }
