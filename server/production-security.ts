@@ -1,5 +1,5 @@
 import { Express } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 export interface SecurityConfig {
   enableSecurityHeaders: boolean;
@@ -64,10 +64,10 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
     },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => {
+    keyGenerator: (req, res) => {
       // Use IP + signature header for more granular limiting
       const signature = req.headers['stripe-signature'] || req.headers['x-twilio-signature'] || '';
-      return `${req.ip}-${signature.slice(0, 10)}`;
+      return `${ipKeyGenerator(req, res)}-${signature.slice(0, 10)}`;
     }
   });
   
@@ -102,9 +102,9 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
     },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => {
+    keyGenerator: (req, res) => {
       // Use user ID + IP for billing operations
-      return `billing-${req.user?.id || 'anonymous'}-${req.ip}`;
+      return `billing-${req.user?.id || 'anonymous'}-${ipKeyGenerator(req, res)}`;
     }
   });
 
@@ -133,7 +133,7 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
           "style-src 'self' https://fonts.googleapis.com",
           "font-src 'self' https://fonts.gstatic.com",
           "img-src 'self' data: https: blob:",
-          "connect-src 'self' https://api.stripe.com wss://wss.twilio.com",
+          "connect-src 'self' https://api.stripe.com https://m.stripe.network wss://eventgw.twilio.com wss://chunderw-*.twilio.com wss://chunderw-vpc-*.twilio.com wss://sdkgw.*.twilio.com wss://media.twilsock.com https://media.twiliocdn.com",
           "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
           "media-src 'self'",
           "worker-src 'self'"
@@ -145,7 +145,7 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
           "font-src 'self' https://fonts.gstatic.com",
           "img-src 'self' data: https: blob:",
-          "connect-src 'self' ws: wss: https://api.stripe.com wss://wss.twilio.com",
+          "connect-src 'self' ws: wss: https://api.stripe.com https://m.stripe.network wss://eventgw.twilio.com wss://chunderw-*.twilio.com wss://chunderw-vpc-*.twilio.com wss://sdkgw.*.twilio.com wss://media.twilsock.com https://media.twiliocdn.com",
           "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
           "media-src 'self'",
           "worker-src 'self' blob:"
@@ -166,7 +166,7 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
       // Referrer Policy
       res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-      // Permissions Policy (Feature Policy) - Allow microphone/speaker for voice features
+      // Permissions Policy (Feature Policy) - Allow microphone and autoplay for voice features
       const permissionsPolicies = [
         'geolocation=()',
         'microphone=(self)', // Allow microphone for voice features
@@ -175,10 +175,10 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
         'usb=()',
         'magnetometer=()',
         'gyroscope=()',
-        'speaker=(self)', // Allow speaker for voice features
+        'autoplay=(self)', // Allow autoplay for voice features
         'vibrate=()',
         'fullscreen=(self)',
-        'sync-xhr=()'
+        'display-capture=()'
       ];
       res.setHeader('Permissions-Policy', permissionsPolicies.join(', '));
 
@@ -188,12 +188,24 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
 
       // Cross-Origin policies - Environment aware for voice features
       if (environment === 'production') {
-        // Enable secure cross-origin policies for production
-        // Using 'credentialless' for COEP to maintain compatibility with voice features
-        res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+        // CRITICAL: Cross-Origin-Embedder-Policy is DISABLED by default in production
+        // because COEP=credentialless commonly breaks Stripe Elements and payment flows.
+        // Only enable if FEATURE_COEP=true is explicitly set AND payments have been validated E2E.
+        // 
+        // WARNING: Before enabling COEP in production:
+        // 1. Test all Stripe payment flows (card elements, payment intents, etc.)
+        // 2. Verify Twilio voice features work correctly
+        // 3. Test any other embedded iframes or cross-origin resources
+        // 4. Validate in staging environment first
+        const enableCOEP = process.env.FEATURE_COEP === 'true';
+        if (enableCOEP) {
+          console.log('[SECURITY WARNING] COEP=credentialless enabled - ensure payment flows are validated');
+          res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+        }
+        
         // Using 'same-origin-allow-popups' to allow Stripe payment flows
         res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
       } else {
         // Development environment - less restrictive
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
