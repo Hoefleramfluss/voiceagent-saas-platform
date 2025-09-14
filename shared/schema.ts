@@ -330,4 +330,5 @@ export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 export type Invoice = typeof invoices.$inferSelect;
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
+export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
