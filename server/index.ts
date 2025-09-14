@@ -89,10 +89,44 @@ app.use((req, res, next) => {
     } else {
       console.log(`[STARTUP] Setting up static file serving for production`);
       try {
+        // Ensure static files are accessible for production deployment
+        const fs = await import('fs');
+        const path = await import('path');
+        
+        const serverPublicPath = path.resolve(import.meta.dirname, 'public');
+        const distPublicPath = path.resolve(import.meta.dirname, '..', 'dist', 'public');
+        
+        // Create symlink or copy static files if server/public doesn't exist or is empty
+        if (!fs.existsSync(serverPublicPath) || fs.readdirSync(serverPublicPath).length === 0) {
+          console.log(`[STARTUP] Static files missing at ${serverPublicPath}`);
+          
+          if (fs.existsSync(distPublicPath)) {
+            try {
+              // Try to create symlink first (preferred for space efficiency)
+              if (fs.existsSync(serverPublicPath)) {
+                fs.rmSync(serverPublicPath, { recursive: true, force: true });
+              }
+              fs.symlinkSync(distPublicPath, serverPublicPath, 'dir');
+              console.log(`[STARTUP] ✅ Created symlink: ${serverPublicPath} → ${distPublicPath}`);
+            } catch (symlinkError) {
+              // Fallback to copying files if symlink fails
+              console.warn(`[STARTUP] Symlink failed, copying files instead:`, symlinkError);
+              fs.cpSync(distPublicPath, serverPublicPath, { recursive: true });
+              console.log(`[STARTUP] ✅ Copied static files to ${serverPublicPath}`);
+            }
+          } else {
+            console.error(`[STARTUP] ❌ Static files not found at ${distPublicPath}`);
+            console.error(`[STARTUP] Run 'npm run build' to generate static files`);
+            throw new Error(`Static files not found. Run 'npm run build' first.`);
+          }
+        } else {
+          console.log(`[STARTUP] Static files already available at ${serverPublicPath}`);
+        }
+        
         serveStatic(app);
-        console.log(`[STARTUP] Static file serving configured`);
+        console.log(`[STARTUP] ✅ Static file serving configured`);
       } catch (staticError) {
-        console.error(`[STARTUP] CRITICAL: Static file serving failed:`, staticError);
+        console.error(`[STARTUP] ❌ CRITICAL: Static file serving failed:`, staticError);
         throw staticError;
       }
     }
