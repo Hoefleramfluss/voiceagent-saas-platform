@@ -5,6 +5,11 @@ import { setupProductionSecurity, setupHealthCheck, getSecurityConfig } from "./
 
 const app = express();
 
+// Trust proxy for proper IP handling behind load balancers
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', true);
+}
+
 // Set up production security middleware early
 const securityConfig = getSecurityConfig();
 setupProductionSecurity(app, securityConfig);
@@ -15,9 +20,10 @@ setupHealthCheck(app);
 // Special raw body parsing for Stripe webhooks BEFORE other middleware
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 
-// Regular JSON and URL-encoded body parsing for other routes
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// Regular JSON and URL-encoded body parsing for other routes with size limits
+const bodyLimit = process.env.NODE_ENV === 'production' ? '1mb' : '10mb';
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: false, limit: bodyLimit }));
 
 app.use((req, res, next) => {
   const start = Date.now();
