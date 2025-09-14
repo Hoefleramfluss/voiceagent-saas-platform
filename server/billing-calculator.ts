@@ -179,7 +179,7 @@ export class BillingCalculator {
     
     events.forEach(event => {
       const kind = event.kind;
-      const quantity = event.quantity; // Now already an integer from schema
+      const quantity = parseFloat(event.quantity.toString()); // Parse decimal quantity from database
       
       if (summary[kind]) {
         summary[kind] += quantity;
