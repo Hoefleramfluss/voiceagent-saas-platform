@@ -54,6 +54,62 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
   app.use('/api/auth/forgot-password', authRateLimit);
   app.use('/api/auth/reset-password', authRateLimit);
 
+  // Webhook-specific rate limiting (protect against spam/replay attacks)
+  const webhookRateLimit = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: environment === 'production' ? 100 : 200, // Higher for webhooks but still limited
+    message: {
+      error: 'Too many webhook requests from this source',
+      retryAfter: '5 minutes'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+      // Use IP + signature header for more granular limiting
+      const signature = req.headers['stripe-signature'] || req.headers['x-twilio-signature'] || '';
+      return `${req.ip}-${signature.slice(0, 10)}`;
+    }
+  });
+  
+  app.use('/api/stripe/webhook', webhookRateLimit);
+  app.use('/api/twilio/webhook', webhookRateLimit);
+
+  // Admin operations rate limiting (prevent abuse of sensitive operations)
+  const adminRateLimit = rateLimit({
+    windowMs: 10 * 60 * 1000, // 10 minutes
+    max: environment === 'production' ? 50 : 100,
+    message: {
+      error: 'Too many admin operations from this IP',
+      retryAfter: '10 minutes'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+      // Skip GET requests, only limit state-changing operations
+      return req.method === 'GET';
+    }
+  });
+
+  app.use('/api/admin', adminRateLimit);
+
+  // Billing/payment operations rate limiting (prevent financial abuse)
+  const billingRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: environment === 'production' ? 20 : 50,
+    message: {
+      error: 'Too many billing operations from this account',
+      retryAfter: '15 minutes'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+      // Use user ID + IP for billing operations
+      return `billing-${req.user?.id || 'anonymous'}-${req.ip}`;
+    }
+  });
+
+  app.use('/api/billing', billingRateLimit);
+
   // Security headers middleware
   if (enableSecurityHeaders) {
     app.use((req, res, next) => {
@@ -130,12 +186,17 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
       res.removeHeader('X-Powered-By');
       res.setHeader('Server', 'VoiceAgent');
 
-      // Cross-Origin policies - Only enforce in production to avoid breaking dev tools
+      // Cross-Origin policies - Environment aware for voice features
       if (environment === 'production') {
-        // Only set these in production after validating third-party compatibility
-        // res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-        // res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'); // Less restrictive for Stripe
+        // Enable secure cross-origin policies for production
+        // Using 'credentialless' for COEP to maintain compatibility with voice features
+        res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+        // Using 'same-origin-allow-popups' to allow Stripe payment flows
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      } else {
+        // Development environment - less restrictive
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       }
 
       next();
@@ -227,7 +288,7 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
       const auditData = {
         action: `admin_${req.method.toLowerCase()}`,
         userId: req.user?.id || null,
-        tenantId: req.user?.tenant_id || null,
+        tenantId: req.user?.tenantId || null,
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),
         endpoint: req.path,
