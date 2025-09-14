@@ -18,7 +18,7 @@ import { z } from "zod";
 export const userRoleEnum = pgEnum('user_role', ['platform_admin', 'customer_admin', 'customer_user', 'support']);
 export const tenantStatusEnum = pgEnum('tenant_status', ['active', 'suspended', 'trial']);
 export const botStatusEnum = pgEnum('bot_status', ['pending', 'provisioning', 'ready', 'failed', 'suspended']);
-export const usageEventKindEnum = pgEnum('usage_event_kind', ['call', 'minute', 'stt_req', 'tts_char', 'gpt_tokens']);
+export const usageEventKindEnum = pgEnum('usage_event_kind', ['call', 'voice_bot_minute', 'forwarding_minute', 'stt_req', 'tts_char', 'gpt_tokens']);
 export const invoiceStatusEnum = pgEnum('invoice_status', ['pending', 'paid', 'failed', 'cancelled']);
 export const supportTicketStatusEnum = pgEnum('support_ticket_status', ['open', 'in_progress', 'resolved', 'closed']);
 export const provisioningJobStatusEnum = pgEnum('provisioning_job_status', ['queued', 'in_progress', 'done', 'error']);
@@ -75,7 +75,7 @@ export const usageEvents = pgTable("usage_events", {
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
   botId: uuid("bot_id").notNull().references(() => bots.id),
   kind: usageEventKindEnum("kind").notNull(),
-  quantity: integer("quantity").notNull(), // Store as integer for precise calculations
+  quantity: decimal("quantity", { precision: 10, scale: 2 }).notNull(), // Store as decimal for precise minute calculations
   metadata: jsonb("metadata"),
   timestamp: timestamp("timestamp").defaultNow().notNull()
 });
@@ -89,6 +89,11 @@ export const subscriptionPlans = pgTable("subscription_plans", {
   yearlyPriceEur: decimal("yearly_price_eur"),
   features: jsonb("features").notNull(), // Array of feature strings
   limits: jsonb("limits").notNull(), // Usage limits object
+  // Minute allowances and rates
+  freeVoiceBotMinutes: integer("free_voice_bot_minutes").notNull().default(0),
+  freeForwardingMinutes: integer("free_forwarding_minutes").notNull().default(0),
+  voiceBotRatePerMinuteCents: integer("voice_bot_rate_per_minute_cents").notNull().default(5), // 5 cents = €0.05
+  forwardingRatePerMinuteCents: integer("forwarding_rate_per_minute_cents").notNull().default(3), // 3 cents = €0.03
   stripePriceId: varchar("stripe_price_id", { length: 255 }),
   stripeProductId: varchar("stripe_product_id", { length: 255 }),
   status: subscriptionPlanStatusEnum("status").notNull().default('active'),
