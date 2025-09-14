@@ -86,7 +86,7 @@ class CustomerOnboardingService {
         success: true,
         stripeCustomerId,
         botId,
-        provisioningJobId
+        provisioningJobId: provisioningJobId || undefined
       };
       
     } catch (error) {
@@ -111,7 +111,7 @@ class CustomerOnboardingService {
       const stripeSecretKey = await keyLoader.getApiKey('stripe');
       if (!stripeSecretKey) {
         console.warn('[Onboarding] Stripe not configured - skipping customer creation');
-        return undefined;
+        return null;
       }
       
       const stripe = new Stripe(stripeSecretKey, {
@@ -139,7 +139,7 @@ class CustomerOnboardingService {
       
     } catch (error) {
       console.error('[Onboarding] Failed to create Stripe customer:', error);
-      return undefined;
+      return null;
     }
   }
   
@@ -193,7 +193,7 @@ class CustomerOnboardingService {
       
     } catch (error) {
       console.error(`[Onboarding] Failed to create default VoiceBot for tenant ${tenantId}:`, error);
-      return undefined;
+      return null;
     }
   }
   
@@ -254,7 +254,7 @@ class CustomerOnboardingService {
       
     } catch (error) {
       console.error(`[Onboarding] Failed to create provisioning job for bot ${botId}:`, error);
-      return undefined;
+      return null;
     }
   }
   

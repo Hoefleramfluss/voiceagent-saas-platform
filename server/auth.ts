@@ -17,7 +17,7 @@ declare global {
 
 const scryptAsync = promisify(scrypt);
 
-async function hashPassword(password: string) {
+export async function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
   const buf = (await scryptAsync(password, salt, 64)) as Buffer;
   return `${buf.toString("hex")}.${salt}`;
@@ -98,107 +98,22 @@ export function setupAuth(app: Express) {
     }
   });
 
+  // ❌ DISABLED: Public self-registration is WRONG for multi-tenant SaaS
+  // Users should only be created by admins via /api/admin/users endpoint
+  // This endpoint allowed anyone to self-register which violates the business model
+  /*
   app.post("/api/register", async (req, res, next) => {
-    try {
-      const validation = registerSchema.safeParse(req.body);
-      if (!validation.success) {
-        return res.status(400).json({ 
-          message: "Validation failed", 
-          errors: validation.error.flatten() 
-        });
-      }
-
-      const { email, password, firstName, lastName } = validation.data;
-      
-      const existingUser = await storage.getUserByEmail(email);
-      if (existingUser) {
-        return res.status(400).json({ message: "Email already exists" });
-      }
-
-      const hashedPassword = await hashPassword(password);
-      // SECURITY: Force all self-registration to customer_user role only
-      // Only platform admins can create users with elevated privileges via separate endpoints
-      const userRole = 'customer_user';
-      
-      // For customer users, automatically create a tenant since self-registration always creates new customers
-      let finalTenantId: string;
-      // All self-registered users get a new tenant automatically
-      const tenant = await storage.createTenant({
-        name: `${firstName || email.split('@')[0]}'s Organization`,
-        status: 'active'
-      });
-      finalTenantId = tenant.id;
-      
-      const user = await storage.createUser({
-        email,
-        password: hashedPassword,
-        tenantId: finalTenantId,
-        role: userRole,
-        firstName,
-        lastName
-      });
-
-      // 🚀 AUTOMATED CUSTOMER ONBOARDING
-      try {
-        const { customerOnboardingService } = await import("./customer-onboarding");
-        
-        // Run onboarding workflow in background
-        customerOnboardingService.onboardNewCustomer({
-          tenantId: finalTenantId,
-          email,
-          firstName,
-          lastName,
-          organizationName: tenant.name
-        }).then((result) => {
-          if (result.success) {
-            console.log(`[Registration] Successfully onboarded customer: ${email}`, {
-              stripeCustomerId: result.stripeCustomerId,
-              botId: result.botId,
-              provisioningJobId: result.provisioningJobId
-            });
-          } else {
-            console.warn(`[Registration] Onboarding failed for customer: ${email}`, result.error);
-          }
-        }).catch((error) => {
-          console.error(`[Registration] Onboarding error for customer: ${email}`, error);
-        });
-      } catch (error) {
-        console.warn('[Registration] Could not start onboarding workflow:', error);
-      }
-
-      req.login(user, (err) => {
-        if (err) return next(err);
-        
-        // SECURITY: Regenerate session to prevent session fixation attacks
-        req.session.regenerate((regenerateErr) => {
-          if (regenerateErr) {
-            console.error('[Security] Session regeneration failed on register:', regenerateErr);
-            return next(regenerateErr);
-          }
-          
-          // Re-authenticate after session regeneration
-          req.login(user, (loginErr) => {
-            if (loginErr) return next(loginErr);
-            
-            // SECURITY: Never return password hash or sensitive data
-            const safeUser = {
-              id: user.id,
-              email: user.email,
-              role: user.role,
-              tenantId: user.tenantId,
-              firstName: user.firstName,
-              lastName: user.lastName,
-              isActive: user.isActive,
-              createdAt: user.createdAt,
-              updatedAt: user.updatedAt
-            };
-            res.status(201).json(safeUser);
-          });
-        });
-      });
-    } catch (error) {
-      next(error);
-    }
+    // ... (endpoint disabled for security - use admin user creation instead)
+  });
+  */
+  
+  // TODO: Redirect to proper customer signup flow or show "Contact Sales" message
+  app.post("/api/register", (req, res) => {
+    res.status(403).json({ 
+      message: "Public registration is disabled. Please contact your administrator to create an account.",
+      error: "REGISTRATION_DISABLED",
+      contactInfo: "Contact sales or your admin for account setup."
+    });
   });
 
   app.post("/api/login", loginRateLimit, (req, res, next) => {
