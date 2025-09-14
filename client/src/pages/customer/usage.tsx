@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
-import type { UsageSummaryResponse, BotsResponse } from "@shared/api-types";
+import type { UsageSummaryResponse, BotsResponse, UsageEventsResponse } from "@shared/api-types";
 import CustomerSidebar from "@/components/customer-sidebar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -33,9 +33,14 @@ export default function CustomerUsage() {
     enabled: !!user?.tenantId
   });
 
-  const activeBot = bots?.find((bot: any) => bot.status === 'ready') || bots?.[0];
+  const { data: usageEvents } = useQuery<UsageEventsResponse>({
+    queryKey: ["/api/usage/events"],
+    enabled: !!user?.tenantId
+  });
 
-  // Mock detailed usage data - in real app this would come from API
+  const activeBot = bots?.find((bot) => bot.status === 'ready') || bots?.[0];
+
+  // Real usage data from API
   const usageBreakdown = {
     calls: usageSummary?.call?.count || 0,
     minutes: Math.round(usageSummary?.minute?.quantity || 0),
@@ -44,37 +49,34 @@ export default function CustomerUsage() {
     gptTokens: Math.round(usageSummary?.gpt_tokens?.quantity || 0)
   };
 
-  // Mock recent activity
-  const recentActivity = [
-    {
-      id: '1',
-      type: 'call',
-      timestamp: new Date(Date.now() - 2 * 60 * 1000),
-      details: { from: '+49 176 12345678', duration: '2m 34s' },
-      usage: { minutes: 2.6, sttRequests: 12, ttsChars: 145, gptTokens: 89 }
-    },
-    {
-      id: '2',
-      type: 'call',
-      timestamp: new Date(Date.now() - 5 * 60 * 1000),
-      details: { from: '+49 152 98765432', duration: '1m 12s' },
-      usage: { minutes: 1.2, sttRequests: 8, ttsChars: 98, gptTokens: 56 }
-    },
-    {
-      id: '3',
-      type: 'call',
-      timestamp: new Date(Date.now() - 8 * 60 * 1000),
-      details: { from: '+49 171 55555555', duration: '45s' },
-      usage: { minutes: 0.8, sttRequests: 3, ttsChars: 42, gptTokens: 23 }
-    },
-    {
-      id: '4',
-      type: 'call',
-      timestamp: new Date(Date.now() - 12 * 60 * 1000),
-      details: { from: '+49 160 77777777', duration: '4m 21s' },
-      usage: { minutes: 4.4, sttRequests: 18, ttsChars: 267, gptTokens: 134 }
-    }
-  ];
+  // Transform usage events into recent activity format with proper type safety
+  const recentActivity = (usageEvents || []).slice(0, 10).map((event) => {
+    // Safely extract metadata with type checking
+    const metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata as Record<string, any> : {};
+    const fromNumber = metadata.from || 'Unknown';
+    const duration = metadata.duration || '-';
+    
+    return {
+      id: event.id,
+      type: event.kind,
+      timestamp: new Date(event.timestamp),
+      details: {
+        botId: event.botId,
+        quantity: Number(event.quantity),
+        from: fromNumber,
+        duration: duration,
+        metadata: event.metadata
+      },
+      // Create usage breakdown based on event type
+      usage: {
+        minutes: event.kind === 'minute' ? Number(event.quantity) : 0,
+        sttRequests: event.kind === 'stt_req' ? Number(event.quantity) : 0,
+        ttsChars: event.kind === 'tts_char' ? Number(event.quantity) : 0,
+        gptTokens: event.kind === 'gpt_tokens' ? Number(event.quantity) : 0,
+        calls: event.kind === 'call' ? Number(event.quantity) : 0
+      }
+    };
+  });
 
   const getTimeRangeLabel = (range: string) => {
     switch (range) {
@@ -327,22 +329,34 @@ export default function CustomerUsage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className="font-mono text-sm">{activity.details.from}</span>
+                          <span className="font-mono text-sm" data-testid={`text-caller-${activity.id}`}>
+                            {activity.details.from}
+                          </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm">{activity.details.duration}</span>
+                          <span className="text-sm" data-testid={`text-duration-${activity.id}`}>
+                            {activity.details.duration}
+                          </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm font-medium">{activity.usage.minutes}</span>
+                          <span className="text-sm font-medium" data-testid={`text-minutes-${activity.id}`}>
+                            {activity.usage.minutes || '-'}
+                          </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm">{activity.usage.sttRequests}</span>
+                          <span className="text-sm" data-testid={`text-stt-${activity.id}`}>
+                            {activity.usage.sttRequests || '-'}
+                          </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm">{activity.usage.ttsChars}</span>
+                          <span className="text-sm" data-testid={`text-tts-${activity.id}`}>
+                            {activity.usage.ttsChars || '-'}
+                          </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm">{activity.usage.gptTokens}</span>
+                          <span className="text-sm" data-testid={`text-tokens-${activity.id}`}>
+                            {activity.usage.gptTokens || '-'}
+                          </span>
                         </TableCell>
                       </TableRow>
                     ))}
