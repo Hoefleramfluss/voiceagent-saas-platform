@@ -19,6 +19,7 @@ const navigation = [
   { name: "VoiceBots", href: "/admin/bots", icon: Bot },
   { name: "Billing", href: "/admin/billing", icon: Receipt },
   { name: "Support", href: "/admin/support", icon: Headphones },
+  { name: "Settings", href: "/admin/settings", icon: Settings },
 ];
 
 const systemNavigation = [

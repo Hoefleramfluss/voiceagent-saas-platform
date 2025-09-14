@@ -3,14 +3,15 @@ import { createServer, type Server } from "http";
 import Stripe from "stripe";
 import { setupAuth, requireAuth, requireRole, requireTenantAccess } from "./auth";
 import { storage } from "./storage";
-import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema } from "@shared/schema";
+import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema } from "@shared/schema";
 import { z } from "zod";
+import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
 
 // Initialize Stripe only if the secret key is available
 let stripe: Stripe | null = null;
 if (process.env.STRIPE_SECRET_KEY) {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: "2024-06-20",
+    apiVersion: "2023-10-16",
   });
 } else {
   console.warn('Warning: STRIPE_SECRET_KEY not found. Stripe functionality will be disabled.');
@@ -379,6 +380,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Status webhook error:", error);
       res.status(500).send("Internal server error");
+    }
+  });
+
+  // API Key management (Platform Admin only)
+  app.get("/api/admin/api-keys", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const apiKeys = await storage.getApiKeys();
+      // Return masked version for security
+      const maskedKeys = apiKeys.map(key => ({
+        ...key,
+        keyValue: maskApiKey(decryptApiKey(key.keyValue))
+      }));
+      res.json(maskedKeys);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/admin/api-keys", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = insertApiKeySchema.safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      // Encrypt the key value before storing
+      const encryptedValue = encryptApiKey(validation.data.keyValue);
+      const apiKey = await storage.createApiKey({
+        ...validation.data,
+        keyValue: encryptedValue
+      });
+
+      // Return the created key with masked value
+      res.status(201).json({
+        ...apiKey,
+        keyValue: maskApiKey(validation.data.keyValue)
+      });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.patch("/api/admin/api-keys/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates = { ...req.body };
+      
+      // If keyValue is being updated, encrypt it
+      if (updates.keyValue) {
+        updates.keyValue = encryptApiKey(updates.keyValue);
+      }
+
+      const apiKey = await storage.updateApiKey(id, updates);
+      
+      // Return with masked value
+      res.json({
+        ...apiKey,
+        keyValue: maskApiKey(decryptApiKey(apiKey.keyValue))
+      });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/admin/api-keys/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      await storage.deleteApiKey(id);
+      res.sendStatus(204);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
     }
   });
 
