@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
-import type { TenantsResponse, BillingOverviewResponse } from "@shared/api-types";
+import type { TenantsResponse, AdminBillingOverviewResponse, GenerateInvoiceResponse } from "@shared/api-types";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,19 +30,47 @@ export default function AdminBilling() {
     queryKey: ["/api/tenants"],
   });
 
-  // This would fetch billing data from Stripe
-  const { data: billingData, isLoading } = useQuery<BillingOverviewResponse>({
-    queryKey: ["/api/billing/overview", timeRange, selectedTenant],
+  // Get real billing data from admin API
+  const { data: billingData, isLoading } = useQuery<AdminBillingOverviewResponse>({
+    queryKey: ["/api/admin/billing/overview", timeRange, selectedTenant],
     queryFn: async () => {
-      // Mock implementation - in real app this would fetch from Stripe
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      return {
-        totalRevenue: 24890,
-        pendingAmount: 3450,
-        paidInvoices: 127,
-        failedPayments: 3,
-        invoices: []
-      };
+      const params = new URLSearchParams();
+      if (timeRange) params.append('timeRange', timeRange);
+      if (selectedTenant) params.append('tenantId', selectedTenant);
+      
+      const url = `/api/admin/billing/overview${params.toString() ? '?' + params.toString() : ''}`;
+      const response = await fetch(url, {
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch billing overview');
+      }
+      
+      return response.json();
+    }
+  });
+
+  // Generate invoice for tenant
+  const { toast } = useToast();
+  const generateInvoiceMutation = useMutation<GenerateInvoiceResponse, unknown, { tenantId: string }>({
+    mutationFn: async ({ tenantId }: { tenantId: string }) => {
+      const response = await apiRequest("POST", "/api/billing/generate-invoice", { tenantId });
+      return await response.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Invoice Generated",
+        description: `Invoice created successfully for €${data.invoice?.totalAmount?.toFixed(2) || 0}`
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/billing/overview"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Invoice Generation Failed",
+        description: error.message || "Failed to generate invoice",
+        variant: "destructive"
+      });
     }
   });
 
@@ -112,7 +142,15 @@ export default function AdminBilling() {
                   <SelectItem value="year">This Year</SelectItem>
                 </SelectContent>
               </Select>
-              <Button data-testid="button-export-billing">
+              <Button 
+                onClick={() => selectedTenant && generateInvoiceMutation.mutate({ tenantId: selectedTenant })}
+                disabled={!selectedTenant || generateInvoiceMutation.isPending}
+                data-testid="button-generate-invoice"
+              >
+                <Receipt className="w-4 h-4 mr-2" />
+                {generateInvoiceMutation.isPending ? "Generating..." : "Generate Invoice"}
+              </Button>
+              <Button variant="outline" data-testid="button-export-billing">
                 <Download className="w-4 h-4 mr-2" />
                 Export Data
               </Button>
@@ -130,7 +168,7 @@ export default function AdminBilling() {
                   <div>
                     <p className="text-sm font-medium text-muted-foreground">Total Revenue</p>
                     <p className="text-3xl font-bold text-foreground" data-testid="metric-total-revenue">
-                      €{billingData?.totalRevenue?.toLocaleString() || '0'}
+                      €{(billingData?.totalRevenue || 0).toFixed(2)}
                     </p>
                   </div>
                   <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
@@ -153,7 +191,7 @@ export default function AdminBilling() {
                   <div>
                     <p className="text-sm font-medium text-muted-foreground">Pending Amount</p>
                     <p className="text-3xl font-bold text-foreground" data-testid="metric-pending-amount">
-                      €{billingData?.pendingAmount?.toLocaleString() || '0'}
+                      €{(billingData?.pendingAmount || 0).toFixed(2)}
                     </p>
                   </div>
                   <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
