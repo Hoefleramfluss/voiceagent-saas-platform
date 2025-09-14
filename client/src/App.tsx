@@ -15,7 +15,7 @@ import AdminSupport from "@/pages/admin/support";
 import AdminSettings from "@/pages/admin/settings";
 import CustomerDashboard from "@/pages/customer/dashboard";
 import CustomerUsage from "@/pages/customer/usage";
-import CustomerBilling from "@/pages/customer/billing";
+import CustomerBilling from "@/pages/customer/billing-enhanced";
 import CustomerSupport from "@/pages/customer/support";
 
 function Router() {
