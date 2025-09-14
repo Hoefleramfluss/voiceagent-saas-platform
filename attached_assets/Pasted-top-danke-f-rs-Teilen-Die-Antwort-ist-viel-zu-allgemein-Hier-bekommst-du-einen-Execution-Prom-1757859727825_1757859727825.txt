@@ -1,0 +1,307 @@
+top — danke fürs Teilen. Die Antwort ist viel zu allgemein.
+Hier bekommst du einen **„Execution-Prompt“**, der Windsurf/Replit/Dev-Agenten zwingt, **gleich Code, Struktur, Deploy & Smoke-Tests** zu liefern – nicht nur Absichtserklärungen. Einfach **komplett kopieren & einfügen**.
+
+---
+
+# 🚀 EXECUTION-PROMPT — VoiceAgent SaaS (Admin + Customer Portal + Auto-Provisioning)
+
+## Rolle & Ziel
+
+Du bist ein **Auto-Builder**. Erzeuge jetzt ein **lauffähiges Multi-Tenant VoiceAgent-SaaS** mit:
+
+1. **Admin/Master-App** (Kunden, Bots, Metriken, Billing, Provisioning)
+2. **Customer-Portal** (Rechnungen, Verbrauch, Support)
+3. **Automatischem VoiceBot-Provisioning** (Twilio + Heroku)
+4. **Usage-Billing nach Verbrauch** (Stripe Invoices)
+
+Liefere **Code, Migrations, Seeds, Tests, Deploy-Skripte**. Keine leeren Platzhalter.
+
+---
+
+## Tech-Stack (fix)
+
+* **Backend:** Python **FastAPI** (uvicorn), **PostgreSQL**, **SQLAlchemy + Alembic**, **Redis** (Rate/Session/Queues)
+* **Workers/Events:** RQ (Redis Queue) oder Celery (Redis Broker) – wähle eines, implementiere Queues für Provisioning & Billing
+* **Frontend Admin & Customer:** **Next.js 14 (App Router) + React + Tailwind**
+* **Auth:** JWT (Access+Refresh), HTTP-only Cookies, RBAC (roles: `platform_admin`, `customer_admin`, `customer_user`, `support`)
+* **Billing:** **Stripe** (usage-based invoices, webhooks)
+* **Telephony:** **Twilio** (Incoming numbers, Webhook, Media Streams)
+* **STT/TTS (nur Schnittstellen vorsehen):** Google STT (Telephony `de-AT`), ElevenLabs TTS – ENV-variablen + Mock-Adapter
+* **Deploy Ziel:** **Heroku** (Backend+Worker+DB+Redis), **Vercel** für Frontends (oder Heroku Static build, beides als Option)
+
+---
+
+## Verzeichnisstruktur
+
+```
+/voiceagent
+  /backend
+    app.py
+    /app
+      __init__.py
+      config.py
+      main.py
+      deps.py
+      /auth
+        models.py, routes.py, service.py, rbac.py
+      /tenancy
+        models.py, middleware.py, service.py
+      /customers
+        models.py, routes.py, dto.py
+      /bots
+        models.py, routes.py, service.py, templates/
+      /usage
+        models.py, routes.py, collector.py
+      /billing
+        models.py, routes.py, stripe_webhooks.py, invoicer.py
+      /provisioning
+        heroku_api.py, twilio_api.py, service.py, tasks.py
+      /support
+        models.py, routes.py
+      /integrations
+        stt_google.py, tts_elevenlabs.py, openai_agent.py (nur adapter)
+      /health
+        routes.py
+    /migrations (alembic)
+    /tests (pytest)
+    requirements.txt
+    Procfile (web, worker)
+    runtime.txt
+  /frontend-admin
+    (Next.js 14 + Tailwind, pages for tenants, bots, usage, billing, support, settings)
+  /frontend-customer
+    (Next.js 14 + Tailwind, pages for invoices, usage, support, bot-settings-lite)
+  /ops
+    seed.py
+    heroku_deploy.sh
+    vercel.json (optional)
+    postman_collection.json
+  .env.example
+  README.md
+```
+
+---
+
+## Environment Variablen (.env.example)
+
+```
+# FastAPI
+APP_ENV=dev
+SECRET_KEY=change_me
+JWT_ACCESS_TTL_MIN=30
+JWT_REFRESH_TTL_DAYS=14
+
+# DB & Cache
+DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/voiceagent
+REDIS_URL=redis://localhost:6379/0
+
+# Twilio
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_APP_WEBHOOK_BASE=https://<backend-domain>
+
+# Heroku API (Provisioning)
+HEROKU_API_KEY=
+HEROKU_PIPELINE_TEMPLATE_APP=voicebot-template     # Name des Template-Apps
+HEROKU_TEAM_NAME=
+
+# Stripe
+STRIPE_API_KEY=
+STRIPE_WEBHOOK_SECRET=
+BILLING_CURRENCY=EUR
+BILLING_PRICE_PLAN=voiceagent_plan_default
+
+# STT/TTS Adapter
+GOOGLE_API_KEY=
+ELEVENLABS_API_KEY=
+
+# OpenAI (optional)
+OPENAI_API_KEY=
+```
+
+---
+
+## Multi-Tenant Datenmodell (Kernauszug)
+
+* `tenants` (id, name, status, created\_at)
+* `users` (id, email, password\_hash, role, tenant\_id, is\_active)
+* `bots` (id, tenant\_id, name, status, twilio\_number, heroku\_app\_name, locale, stt\_provider, tts\_provider, config\_json)
+* `usage_events` (id, tenant\_id, bot\_id, kind ENUM\[call, minute, stt\_req, tts\_char, gpt\_tokens], quantity, ts)
+* `billing_accounts` (tenant\_id, stripe\_customer\_id)
+* `invoices` (id, tenant\_id, period\_start, period\_end, stripe\_invoice\_id, status, total\_amount)
+* `support_tickets` (id, tenant\_id, author\_user\_id, subject, body, status)
+* `provisioning_jobs` (id, tenant\_id, bot\_id, status, payload\_json, error)
+
+**Wichtig:** Alle Tabellen mit `tenant_id` + Row-Level Guards in Services. RBAC in `rbac.py`.
+
+---
+
+## API-Endpoints (Auszug & Akzeptanzkriterien)
+
+### Auth
+
+* `POST /api/auth/login` → JWT + Cookies
+* `POST /api/auth/refresh`
+* `POST /api/auth/logout`
+
+### Tenants & Users (Admin only)
+
+* `GET/POST /api/tenants`
+* `POST /api/tenants/{id}/users` (rollenvergabe)
+
+### Bots
+
+* `GET /api/bots` (scoped by tenant)
+* `POST /api/bots` → **triggert Provisioning-Job**
+* `GET /api/bots/{id}` / `PATCH /api/bots/{id}`
+* `POST /api/bots/{id}/rotate-number` (Twilio)
+
+### Provisioning (Async Worker)
+
+* `POST /api/provisioning/jobs` (internal)
+* Worker-Task:
+
+  1. **Heroku**: App aus Template klonen/erstellen, ENV setzen (`TENANT_ID`, `BOT_ID`, Keys), dynos starten
+  2. **Twilio**: Nummer kaufen/zuordnen, Webhook URLs setzen → `POST /telephony/incoming`
+  3. Health-Ping; Status = `ready` oder Fehler in `provisioning_jobs.error`
+
+### Telephony (Twilio Webhooks)
+
+* `POST /telephony/incoming` (Call-Start → usage\_event call+minute timer)
+* `POST /telephony/status` (completed → Minuten finalisieren)
+* (Media-Stream nur als Endpoint-Stub, Logging aktiviert)
+
+### Usage & Billing
+
+* `GET /api/usage/summary?range=month`
+* `POST /api/billing/invoice/run` (Admin triggers manual)
+* **Stripe Webhook:** `/api/billing/stripe/webhook` (invoice.created, invoice.finalized, payment\_intent.succeeded/failed)
+
+### Support
+
+* `GET/POST /api/support/tickets`
+* `PATCH /api/support/tickets/{id}` (Statuswechsel)
+
+### Health
+
+* `GET /api/health` (db, redis, queue ok)
+
+---
+
+## Frontend – Seiten (Kurz)
+
+**Admin-App**
+
+* Login
+* Tenants (Liste/Neu)
+* Bots (Status, Fehler, „Neu anlegen“ Wizard)
+* Usage (Charts: Calls/Min/Requests)
+* Billing (Stripe-Status, Rechnungen)
+* Support Inbox
+* Settings (Keys „scoped per tenant“ + Platform-Keys)
+
+**Customer-App**
+
+* Dashboard (Verbrauch)
+* Invoices (Liste, PDF-Link von Stripe)
+* Support (Tickets)
+* Bot-Settings Light (Greeting, Sprache, Stimme) – optional
+
+---
+
+## Provisioning-Flow (Detail)
+
+1. Admin legt **Bot** an → `POST /api/bots`
+2. Backend erstellt `provisioning_job` (status `queued`)
+3. Worker:
+
+   * **Heroku**: `apps.create`, `config-vars.update` (ENV aus Bot+Tenant), `dynos.start`
+   * **Twilio**: `incomingPhoneNumbers.create` (Suchkriterium Ländercode), SIP/Webhook auf Backend setzen
+   * Healthcheck auf `https://{heroku-app}.herokuapp.com/health`
+4. Bot.status → `ready` und `twilio_number` speichern; Job.status → `done`
+
+Fehler → Job.status=`error` + `error` Feld füllen, Bot.status=`failed`.
+
+---
+
+## Usage-Metriken (zwingend)
+
+* **call\_started** (1 event)
+* **minutes** (aufgerundet je 60s, bei `status=completed` finalisiert)
+* **stt\_requests**, **tts\_chars**, **gpt\_tokens** (Counter via Adapter-Mocks inkrementieren)
+* Aggregationen pro Tenant/Bot/Tag/Monat
+
+---
+
+## Abrechnung (Stripe)
+
+* Beim **Tenant-Onboarding** → `stripe_customer_id` anlegen
+* Monatliches `invoice.run`:
+
+  * Usage summieren × Preise (in `pricing.json` im Repo)
+  * **Stripe Usage-based invoice items** erstellen
+  * Invoice finalisieren
+* Webhook aktualisiert `invoices` Tabelle + Status.
+* Im Customer-Portal anzeigen (Link zu Stripe-Hosted Invoice).
+
+---
+
+## Sicherheit & Datenschutz
+
+* Mandantenfähigkeit (alle Queries scopen auf `tenant_id`)
+* RBAC in Decorators (Admin vs Customer)
+* API-Keys verschlüsselt (at-rest via Fernet oder KMS-ready)
+* Request/Response-Logging mit PII-Filter
+* DSGVO: Anonymisierung für Call-Logs optional per Flag
+
+---
+
+## Tests & Smoke
+
+* **pytest**:
+
+  * Auth Flow happy-path
+  * Tenant isolation (user A kann keine Daten von Tenant B sehen)
+  * Bot-Provisioning (mocks)
+  * Stripe Webhook Handler
+* **/ops/postman\_collection.json** mit Smoke-Requests: login → create tenant → create bot → check status → simulate usage → run invoice
+
+---
+
+## Seeds (ops/seed.py)
+
+* Platform-Admin User
+* Demo-Tenant + 2 Demo-User
+* 1 Demo-Bot (status=ready, fake twilio\_number)
+* 100 Fake-Usage Events (aktueller Monat)
+
+---
+
+## Deliverables (DoD – Definition of Done)
+
+* Repo wie oben, lauffähig lokal (Docker optional)
+* `alembic upgrade head` läuft ohne Fehler
+* `pytest` grün
+* `heroku_deploy.sh` erstellt Backend+Worker App, setzt ENV, pusht Code
+* Admin-Frontend & Customer-Frontend builden und starten
+* In Admin-UI: Tenant anlegen → Bot anlegen → Status „ready“ (mit Mocks)
+* In Customer-UI: Rechnungen-Liste (Dummy), Verbrauchs-Chart
+* Stripe Webhook lokal simulierbar (`stripe listen` Doku im README)
+
+---
+
+## Umsetzung jetzt starten — konkrete Schritte
+
+1. **Gerüst generieren** (Backend+Beide Frontends)
+2. **DB-Schemas + Alembic** schreiben
+3. **Auth & RBAC** implementieren
+4. **Tenancy Guards** in Services/Middleware
+5. **Bots & Provisioning (mit Mocks)**
+6. **Usage Collector** (Events + Cron/Worker)
+7. **Stripe Billing + Webhook**
+8. **UIs** (Admin, Customer)
+9. **Seeds, Tests, Smoke**
+10. **Heroku Deploy Skript** + README mit Schritt-für-Schritt
+
+**Bitte jetzt alles generieren, Code schreiben, Migrations erzeugen, Seeds & Tests hinzufügen, und die Smoke-Checks beschreiben.**
+Keine Platzhaltertexte – lauffähige Minimal-Features mit echten Endpoints, echten Tabellen, echter RBAC-Durchsetzung und echter Mandantentrennung.
