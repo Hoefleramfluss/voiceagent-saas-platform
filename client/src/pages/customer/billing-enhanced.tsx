@@ -25,6 +25,7 @@ import {
   Zap,
   Users,
   Phone,
+  PhoneForwarded,
   Star,
   Settings,
   TrendingUp
@@ -71,9 +72,27 @@ interface UsageData {
     quantity: number;
     totalAmountCents: number;
     name: string;
+    description?: string;
+    freeAllowance?: number;
+    usedFromFree?: number;
   }>;
   periodStart: string;
   periodEnd: string;
+  subscriptionPlan?: SubscriptionPlan | null;
+  minuteBreakdown?: {
+    voiceBotMinutes: {
+      used: number;
+      free: number;
+      overage: number;
+      overageRate: number;
+    };
+    forwardingMinutes: {
+      used: number;
+      free: number;
+      overage: number;
+      overageRate: number;
+    };
+  };
 }
 
 export default function EnhancedCustomerBilling() {
@@ -406,6 +425,74 @@ export default function EnhancedCustomerBilling() {
             </Card>
           )}
 
+          {/* Minute Usage Breakdown */}
+          {usageData?.minuteBreakdown && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Clock className="w-5 h-5" />
+                  Minuten-Verbrauch
+                </CardTitle>
+                <CardDescription>
+                  Übersicht Ihrer VoiceBot- und Weiterleitungsminuten
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* VoiceBot Minutes */}
+                <div className="space-y-3" data-testid="voicebot-usage">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Phone className="w-4 h-4 text-blue-600" />
+                      <span className="font-medium">VoiceBot-Minuten</span>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {usageData.minuteBreakdown.voiceBotMinutes.used} / {usageData.minuteBreakdown.voiceBotMinutes.free + usageData.minuteBreakdown.voiceBotMinutes.overage} verwendet
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Progress 
+                      value={Math.min(100, (usageData.minuteBreakdown.voiceBotMinutes.used / Math.max(usageData.minuteBreakdown.voiceBotMinutes.free, 1)) * 100)} 
+                      className="h-2"
+                      data-testid="voicebot-progress"
+                    />
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>✓ {Math.min(usageData.minuteBreakdown.voiceBotMinutes.used, usageData.minuteBreakdown.voiceBotMinutes.free)} kostenlose Min.</span>
+                      {usageData.minuteBreakdown.voiceBotMinutes.overage > 0 && (
+                        <span className="text-orange-600">+ {usageData.minuteBreakdown.voiceBotMinutes.overage} Min. à €{(usageData.minuteBreakdown.voiceBotMinutes.overageRate / 100).toFixed(3)}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Forwarding Minutes */}
+                <div className="space-y-3" data-testid="forwarding-usage">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <PhoneForwarded className="w-4 h-4 text-green-600" />
+                      <span className="font-medium">Weiterleitungs-Minuten</span>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {usageData.minuteBreakdown.forwardingMinutes.used} / {usageData.minuteBreakdown.forwardingMinutes.free + usageData.minuteBreakdown.forwardingMinutes.overage} verwendet
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Progress 
+                      value={Math.min(100, (usageData.minuteBreakdown.forwardingMinutes.used / Math.max(usageData.minuteBreakdown.forwardingMinutes.free, 1)) * 100)} 
+                      className="h-2"
+                      data-testid="forwarding-progress"
+                    />
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>✓ {Math.min(usageData.minuteBreakdown.forwardingMinutes.used, usageData.minuteBreakdown.forwardingMinutes.free)} kostenlose Min.</span>
+                      {usageData.minuteBreakdown.forwardingMinutes.overage > 0 && (
+                        <span className="text-orange-600">+ {usageData.minuteBreakdown.forwardingMinutes.overage} Min. à €{(usageData.minuteBreakdown.forwardingMinutes.overageRate / 100).toFixed(3)}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Current Month Costs */}
           <Card>
             <CardHeader>
@@ -422,17 +509,25 @@ export default function EnhancedCustomerBilling() {
                 <div className="text-center py-8 text-muted-foreground">Lade Kostendaten...</div>
               ) : usageData ? (
                 <div className="space-y-4">
-                  <div className="text-3xl font-bold">
+                  <div className="text-3xl font-bold" data-testid="total-cost">
                     €{(usageData.totalCostCents / 100).toFixed(2)}
                   </div>
                   
                   {usageData.lineItems.length > 0 && (
                     <div className="space-y-2">
                       {usageData.lineItems.map((item, index) => (
-                        <div key={index} className="flex justify-between items-center py-2 border-b border-border/50 last:border-0">
+                        <div key={index} className="flex justify-between items-center py-2 border-b border-border/50 last:border-0" data-testid={`line-item-${index}`}>
                           <div>
                             <span className="font-medium">{item.name}</span>
                             <span className="text-sm text-muted-foreground ml-2">({item.quantity} Einheiten)</span>
+                            {item.description && (
+                              <div className="text-xs text-muted-foreground">{item.description}</div>
+                            )}
+                            {item.freeAllowance && (
+                              <div className="text-xs text-green-600">
+                                ✓ {item.usedFromFree || 0} von {item.freeAllowance} kostenlosen Einheiten genutzt
+                              </div>
+                            )}
                           </div>
                           <span className="font-medium">€{(item.totalAmountCents / 100).toFixed(2)}</span>
                         </div>
