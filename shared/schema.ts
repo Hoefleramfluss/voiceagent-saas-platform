@@ -206,6 +206,16 @@ export const insertUserSchema = createInsertSchema(users).omit({
   createdAt: true,
   updatedAt: true,
   lastLoginAt: true
+}).refine(data => {
+  // SECURITY: Customer roles must always have a tenantId
+  const customerRoles = ['customer_user', 'customer_admin'];
+  if (data.role && customerRoles.includes(data.role) && !data.tenantId) {
+    return false;
+  }
+  return true;
+}, {
+  message: "Customer roles must have a valid tenantId",
+  path: ["tenantId"]
 });
 
 export const insertBotSchema = createInsertSchema(bots).omit({

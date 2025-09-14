@@ -54,6 +54,24 @@ export const criticalKeyOperationsRateLimit = rateLimit({
 });
 
 /**
+ * Rate limiter for login attempts
+ * Prevents brute force attacks on authentication endpoints
+ */
+export const loginRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 login attempts per 15 minutes
+  message: {
+    error: 'Too many login attempts from this IP, please try again later.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // More aggressive rate limiting for failed attempts
+  skipSuccessfulRequests: true, // Don't count successful requests
+  skipFailedRequests: false, // Count failed requests
+});
+
+/**
  * Enhanced authentication middleware for sensitive operations
  * Requires recent authentication (within last 30 minutes) for critical operations
  */
