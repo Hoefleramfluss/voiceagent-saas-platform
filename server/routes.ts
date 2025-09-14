@@ -795,6 +795,128 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin Package Management Routes
+  app.get("/api/admin/packages", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const plans = await storage.getSubscriptionPlans(false); // Get all plans including inactive
+      res.json(plans);
+    } catch (error) {
+      console.error('[Admin] Get packages error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/admin/packages", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      // Validate input using Zod
+      const createPackageSchema = z.object({
+        name: z.string().min(2),
+        description: z.string().optional(),
+        monthlyPriceEur: z.string(),
+        yearlyPriceEur: z.string().optional(),
+        features: z.array(z.string()),
+        limits: z.object({}).optional(),
+        freeVoiceBotMinutes: z.number().min(0),
+        freeForwardingMinutes: z.number().min(0),
+        voiceBotRatePerMinuteCents: z.number().min(1),
+        forwardingRatePerMinuteCents: z.number().min(1),
+        status: z.enum(['active', 'inactive', 'deprecated'])
+      });
+      
+      const validation = createPackageSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Invalid input", 
+          errors: validation.error.issues 
+        });
+      }
+      
+      const packageData = validation.data;
+      
+      // Create package using storage
+      const newPackage = await storage.createSubscriptionPlan({
+        name: packageData.name,
+        description: packageData.description || null,
+        monthlyPriceEur: packageData.monthlyPriceEur,
+        yearlyPriceEur: packageData.yearlyPriceEur || null,
+        features: packageData.features,
+        limits: packageData.limits || {},
+        freeVoiceBotMinutes: packageData.freeVoiceBotMinutes,
+        freeForwardingMinutes: packageData.freeForwardingMinutes,
+        voiceBotRatePerMinuteCents: packageData.voiceBotRatePerMinuteCents,
+        forwardingRatePerMinuteCents: packageData.forwardingRatePerMinuteCents,
+        status: packageData.status,
+        sortOrder: 0
+      });
+      
+      res.json(newPackage);
+    } catch (error) {
+      console.error('[Admin] Create package error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.put("/api/admin/packages/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Validate input
+      const updatePackageSchema = z.object({
+        name: z.string().min(2).optional(),
+        description: z.string().optional(),
+        monthlyPriceEur: z.string().optional(),
+        yearlyPriceEur: z.string().optional(),
+        features: z.array(z.string()).optional(),
+        limits: z.object({}).optional(),
+        freeVoiceBotMinutes: z.number().min(0).optional(),
+        freeForwardingMinutes: z.number().min(0).optional(),
+        voiceBotRatePerMinuteCents: z.number().min(1).optional(),
+        forwardingRatePerMinuteCents: z.number().min(1).optional(),
+        status: z.enum(['active', 'inactive', 'deprecated']).optional()
+      });
+      
+      const validation = updatePackageSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Invalid input", 
+          errors: validation.error.issues 
+        });
+      }
+      
+      // Update package
+      const updatedPackage = await storage.updateSubscriptionPlan(id, validation.data);
+      
+      if (!updatedPackage) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      
+      res.json(updatedPackage);
+    } catch (error) {
+      console.error('[Admin] Update package error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/admin/packages/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Check if package exists and can be deleted
+      const existingPackage = await storage.getSubscriptionPlan(id);
+      if (!existingPackage) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      
+      // For safety, set to deprecated instead of actual deletion
+      await storage.updateSubscriptionPlan(id, { status: 'deprecated' });
+      
+      res.json({ message: "Package deprecated successfully" });
+    } catch (error) {
+      console.error('[Admin] Delete package error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // Subscription Management Routes
   app.get("/api/subscription/plans", requireAuth, requireTenantAccess, async (req, res) => {
     try {

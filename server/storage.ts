@@ -126,6 +126,8 @@ export interface IStorage {
   // Subscription management
   getSubscriptionPlans(activeOnly?: boolean): Promise<SubscriptionPlan[]>;
   getSubscriptionPlan(planId: string): Promise<SubscriptionPlan | null>;
+  createSubscriptionPlan(plan: Partial<SubscriptionPlan>): Promise<SubscriptionPlan>;
+  updateSubscriptionPlan(planId: string, updates: Partial<SubscriptionPlan>): Promise<SubscriptionPlan | null>;
   updateTenantSubscription(tenantId: string, data: {
     planId: string;
     subscriptionStatus?: string;
@@ -561,6 +563,56 @@ export class DatabaseStorage implements IStorage {
       .update(billingAccounts)
       .set(updateData)
       .where(eq(billingAccounts.tenantId, tenantId));
+  }
+
+  async createSubscriptionPlan(planData: Partial<SubscriptionPlan>): Promise<SubscriptionPlan> {
+    const [plan] = await db
+      .insert(subscriptionPlans)
+      .values({
+        name: planData.name!,
+        description: planData.description,
+        monthlyPriceEur: planData.monthlyPriceEur!,
+        yearlyPriceEur: planData.yearlyPriceEur,
+        features: planData.features!,
+        limits: planData.limits!,
+        freeVoiceBotMinutes: planData.freeVoiceBotMinutes || 0,
+        freeForwardingMinutes: planData.freeForwardingMinutes || 0,
+        voiceBotRatePerMinuteCents: planData.voiceBotRatePerMinuteCents || 5,
+        forwardingRatePerMinuteCents: planData.forwardingRatePerMinuteCents || 3,
+        status: planData.status || 'active',
+        sortOrder: planData.sortOrder || 0
+      })
+      .returning();
+    
+    return plan;
+  }
+
+  async updateSubscriptionPlan(planId: string, updates: Partial<SubscriptionPlan>): Promise<SubscriptionPlan | null> {
+    const updateData: any = {
+      updatedAt: new Date()
+    };
+    
+    // Only include non-undefined fields in the update
+    if (updates.name !== undefined) updateData.name = updates.name;
+    if (updates.description !== undefined) updateData.description = updates.description;
+    if (updates.monthlyPriceEur !== undefined) updateData.monthlyPriceEur = updates.monthlyPriceEur;
+    if (updates.yearlyPriceEur !== undefined) updateData.yearlyPriceEur = updates.yearlyPriceEur;
+    if (updates.features !== undefined) updateData.features = updates.features;
+    if (updates.limits !== undefined) updateData.limits = updates.limits;
+    if (updates.freeVoiceBotMinutes !== undefined) updateData.freeVoiceBotMinutes = updates.freeVoiceBotMinutes;
+    if (updates.freeForwardingMinutes !== undefined) updateData.freeForwardingMinutes = updates.freeForwardingMinutes;
+    if (updates.voiceBotRatePerMinuteCents !== undefined) updateData.voiceBotRatePerMinuteCents = updates.voiceBotRatePerMinuteCents;
+    if (updates.forwardingRatePerMinuteCents !== undefined) updateData.forwardingRatePerMinuteCents = updates.forwardingRatePerMinuteCents;
+    if (updates.status !== undefined) updateData.status = updates.status;
+    if (updates.sortOrder !== undefined) updateData.sortOrder = updates.sortOrder;
+    
+    const [updatedPlan] = await db
+      .update(subscriptionPlans)
+      .set(updateData)
+      .where(eq(subscriptionPlans.id, planId))
+      .returning();
+    
+    return updatedPlan || null;
   }
 
   async getTenantSubscription(tenantId: string): Promise<{
