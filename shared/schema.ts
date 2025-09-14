@@ -95,7 +95,7 @@ export const invoices = pgTable("invoices", {
   periodEnd: timestamp("period_end").notNull(),
   stripeInvoiceId: varchar("stripe_invoice_id", { length: 255 }),
   status: invoiceStatusEnum("status").notNull().default('pending'),
-  totalAmountCents: integer("total_amount_cents").notNull(), // Store as integer cents
+  totalAmount: decimal("total_amount").notNull(), // Match existing database column
   currency: varchar("currency", { length: 3 }).notNull().default('EUR'),
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

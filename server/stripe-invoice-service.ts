@@ -185,7 +185,7 @@ export class StripeInvoiceService {
         periodEnd,
         stripeInvoiceId: finalizedInvoice.id,
         status: 'pending',
-        totalAmountCents: billingCalculation.totalCents,
+        totalAmount: (billingCalculation.totalCents / 100).toString(),
         currency: billingCalculation.currency,
         metadata: {
           stripe_status: finalizedInvoice.status,
@@ -258,7 +258,7 @@ export class StripeInvoiceService {
       );
 
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: invoice.totalAmountCents, // Already in cents
+        amount: Math.round(parseFloat(invoice.totalAmount) * 100), // Convert to cents
         currency: invoice.currency.toLowerCase(),
         customer: billingAccount.stripeCustomerId,
         description: `Payment for Invoice ${invoice.id}`,
@@ -355,7 +355,7 @@ export class StripeInvoiceService {
         success: true,
         invoiceId,
         stripeInvoiceId: invoice.stripeInvoiceId,
-        totalAmount: invoice.totalAmountCents / 100
+        totalAmount: parseFloat(invoice.totalAmount)
       };
 
     } catch (error) {

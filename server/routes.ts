@@ -794,7 +794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         allInvoices.push(...invoices.map(inv => ({ ...inv, tenantName: tenant.name })));
         
         for (const invoice of invoices) {
-          const amount = invoice.totalAmountCents / 100; // Convert cents to decimal
+          const amount = parseFloat(invoice.totalAmount); // Already decimal
           if (invoice.status === 'paid') {
             totalRevenue += amount;
             paidInvoices++;
