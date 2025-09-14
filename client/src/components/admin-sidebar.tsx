@@ -1,5 +1,6 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
+import { useTranslation } from 'react-i18next';
 import { Button } from "@/components/ui/button";
 import { 
   Bot, 
@@ -13,23 +14,27 @@ import {
   LogOut
 } from "lucide-react";
 
-const navigation = [
-  { name: "Dashboard", href: "/admin", icon: BarChart },
-  { name: "Customers", href: "/admin/customers", icon: Users },
-  { name: "VoiceBots", href: "/admin/bots", icon: Bot },
-  { name: "Billing", href: "/admin/billing", icon: Receipt },
-  { name: "Support", href: "/admin/support", icon: Headphones },
-  { name: "Settings", href: "/admin/settings", icon: Settings },
+const getNavigation = (t: any) => [
+  { name: t('dashboard'), href: "/admin", icon: BarChart },
+  { name: t('customers'), href: "/admin/customers", icon: Users },
+  { name: t('voiceBots'), href: "/admin/bots", icon: Bot },
+  { name: t('billing'), href: "/admin/billing", icon: Receipt },
+  { name: t('support'), href: "/admin/support", icon: Headphones },
+  { name: t('settings'), href: "/admin/settings", icon: Settings },
 ];
 
-const systemNavigation = [
-  { name: "System Health", href: "/admin/health", icon: Server },
-  { name: "Logs", href: "/admin/logs", icon: FileText },
+const getSystemNavigation = (t: any) => [
+  { name: t('systemHealth'), href: "/admin/health", icon: Server },
+  { name: "Protokolle", href: "/admin/logs", icon: FileText },
 ];
 
 export default function AdminSidebar() {
+  const { t } = useTranslation();
   const { user, logoutMutation } = useAuth();
   const [location, navigate] = useLocation();
+  
+  const navigation = getNavigation(t);
+  const systemNavigation = getSystemNavigation(t);
 
   const handleLogout = () => {
     logoutMutation.mutate();
@@ -44,7 +49,7 @@ export default function AdminSidebar() {
         </div>
         <div>
           <h1 className="text-lg font-semibold text-foreground">VoiceAgent</h1>
-          <p className="text-xs text-muted-foreground">Admin Portal</p>
+          <p className="text-xs text-muted-foreground">Admin-Portal</p>
         </div>
       </div>
 
