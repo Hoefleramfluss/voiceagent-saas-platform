@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import Stripe from "stripe";
 import { setupAuth, requireAuth, requireRole, requireTenantAccess } from "./auth";
 import { storage } from "./storage";
-import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema } from "@shared/schema";
+import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema } from "@shared/schema";
 import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
 import { keyLoader, getStripeKey, invalidateKeyCache } from "./key-loader";
@@ -310,9 +310,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/usage/events", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      let tenantId: string;
+
+      if (user.role === 'platform_admin') {
+        tenantId = req.query.tenantId as string;
+        if (!tenantId) {
+          return res.status(400).json({ message: "tenantId query parameter required for admin" });
+        }
+      } else {
+        tenantId = user.tenantId!;
+      }
+
+      // Parse filtering parameters
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const kind = req.query.kind as string;
+      const botId = req.query.botId as string;
+      
+      // Parse date parameters
+      let periodStart: Date | undefined;
+      let periodEnd: Date | undefined;
+      
+      if (req.query.periodStart) {
+        periodStart = new Date(req.query.periodStart as string);
+        if (isNaN(periodStart.getTime())) {
+          return res.status(400).json({ message: "Invalid periodStart date format" });
+        }
+      }
+      
+      if (req.query.periodEnd) {
+        periodEnd = new Date(req.query.periodEnd as string);
+        if (isNaN(periodEnd.getTime())) {
+          return res.status(400).json({ message: "Invalid periodEnd date format" });
+        }
+      }
+
+      // Validate botId belongs to user's tenant if provided
+      if (botId) {
+        const bot = await storage.getBot(botId, tenantId);
+        if (!bot) {
+          return res.status(403).json({ message: "Bot not found or access denied" });
+        }
+      }
+
+      const events = await storage.getUsageEvents(tenantId, {
+        limit,
+        offset,
+        periodStart,
+        periodEnd,
+        kind,
+        botId
+      });
+      
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   app.post("/api/usage/events", requireAuth, async (req, res) => {
     try {
-      const event = await storage.createUsageEvent(req.body);
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      // Enforce tenant isolation - tenantId must come from authenticated user
+      let tenantId: string;
+      if (user.role === 'platform_admin') {
+        tenantId = req.body.tenantId;
+        if (!tenantId) {
+          return res.status(400).json({ message: "tenantId required in request body for admin" });
+        }
+      } else {
+        tenantId = user.tenantId!;
+      }
+
+      // Validate request with Zod schema and enforce tenantId
+      const validation = insertUsageEventSchema.extend({
+        metadata: z.any().optional().refine(
+          (data) => !data || JSON.stringify(data).length <= 10000,
+          "Metadata too large (max 10KB)"
+        )
+      }).safeParse({
+        ...req.body,
+        tenantId // Override with authenticated user's tenantId
+      });
+
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      // Validate botId belongs to user's tenant
+      if (validation.data.botId) {
+        const bot = await storage.getBot(validation.data.botId, tenantId);
+        if (!bot) {
+          return res.status(403).json({ 
+            message: "Bot not found or access denied" 
+          });
+        }
+      }
+
+      const event = await storage.createUsageEvent(validation.data);
       res.status(201).json(event);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });

@@ -54,6 +54,14 @@ export interface IStorage {
 
   // Usage operations
   createUsageEvent(event: InsertUsageEvent): Promise<UsageEvent>;
+  getUsageEvents(tenantId: string, options?: {
+    limit?: number;
+    offset?: number;
+    periodStart?: Date;
+    periodEnd?: Date;
+    kind?: string;
+    botId?: string;
+  }): Promise<UsageEvent[]>;
   getUsageSummary(tenantId: string, periodStart: Date, periodEnd: Date): Promise<any>;
 
   // Support operations
@@ -171,6 +179,51 @@ export class DatabaseStorage implements IStorage {
       .values(insertEvent)
       .returning();
     return event;
+  }
+
+  async getUsageEvents(tenantId: string, options: {
+    limit?: number;
+    offset?: number;
+    periodStart?: Date;
+    periodEnd?: Date;
+    kind?: string;
+    botId?: string;
+  } = {}): Promise<UsageEvent[]> {
+    const {
+      limit = 50,
+      offset = 0,
+      periodStart,
+      periodEnd,
+      kind,
+      botId
+    } = options;
+
+    // Build dynamic where conditions
+    const conditions = [eq(usageEvents.tenantId, tenantId)];
+    
+    if (periodStart) {
+      conditions.push(gte(usageEvents.timestamp, periodStart));
+    }
+    
+    if (periodEnd) {
+      conditions.push(lte(usageEvents.timestamp, periodEnd));
+    }
+    
+    if (kind) {
+      conditions.push(eq(usageEvents.kind, kind as any));
+    }
+    
+    if (botId) {
+      conditions.push(eq(usageEvents.botId, botId));
+    }
+
+    return await db
+      .select()
+      .from(usageEvents)
+      .where(and(...conditions))
+      .orderBy(desc(usageEvents.timestamp))
+      .limit(limit)
+      .offset(offset);
   }
 
   async getUsageSummary(tenantId: string, periodStart: Date, periodEnd: Date): Promise<any> {

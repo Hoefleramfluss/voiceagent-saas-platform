@@ -67,6 +67,9 @@ export interface UsageSummaryResponse {
   };
 }
 
+// Usage Events Response
+export interface UsageEventsResponse extends Array<SerializedUsageEvent> {}
+
 // Support Tickets API Response
 export interface SupportTicketsResponse extends Array<SerializedSupportTicket> {}
 
@@ -108,5 +111,6 @@ export type QueryKeys =
   | ["/api/bots"]
   | ["/api/bots", string] // with tenantId
   | ["/api/usage/summary", string] // with time period
+  | ["/api/usage/events"] // usage events
   | ["/api/support/tickets"]
   | ["/api/billing/overview", string, string]; // with timeRange and tenantId
