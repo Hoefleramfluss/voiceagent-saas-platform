@@ -1,8 +1,16 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { setupProductionSecurity, setupHealthCheck, getSecurityConfig } from "./production-security";
 
 const app = express();
+
+// Set up production security middleware early
+const securityConfig = getSecurityConfig();
+setupProductionSecurity(app, securityConfig);
+
+// Set up health check endpoints
+setupHealthCheck(app);
 
 // Special raw body parsing for Stripe webhooks BEFORE other middleware
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
