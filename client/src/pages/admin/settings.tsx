@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Key, Edit, Trash2, Eye, EyeOff, Settings } from "lucide-react";
+import { Plus, Key, Edit, Trash2, Settings } from "lucide-react";
 
 interface CreateApiKeyData {
   keyName: string;
@@ -55,7 +55,7 @@ export default function AdminSettings() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [deletingKey, setDeletingKey] = useState<ApiKey | null>(null);
-  const [showValues, setShowValues] = useState<Record<string, boolean>>({});
+  // Removed showValues state - no longer showing/hiding key values for security
   
   const [newApiKey, setNewApiKey] = useState<CreateApiKeyData>({
     keyName: "",
@@ -174,12 +174,7 @@ export default function AdminSettings() {
     });
   };
 
-  const toggleShowValue = (keyId: string) => {
-    setShowValues(prev => ({
-      ...prev,
-      [keyId]: !prev[keyId]
-    }));
-  };
+  // Removed toggleShowValue function - no longer showing/hiding key values for security
 
   if (isLoading) {
     return (
@@ -357,17 +352,12 @@ export default function AdminSettings() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <code className="text-sm font-mono" data-testid={`text-key-value-${apiKey.id}`}>
-                                {showValues[apiKey.id] ? apiKey.keyValue : apiKey.keyValue}
+                              <code className="text-sm font-mono bg-muted px-2 py-1 rounded" data-testid={`text-key-value-${apiKey.id}`}>
+                                {apiKey.keyValue}
                               </code>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => toggleShowValue(apiKey.id)}
-                                data-testid={`button-toggle-value-${apiKey.id}`}
-                              >
-                                {showValues[apiKey.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                              </Button>
+                              <Badge variant="secondary" className="text-xs">
+                                Encrypted
+                              </Badge>
                             </div>
                           </TableCell>
                           <TableCell>
