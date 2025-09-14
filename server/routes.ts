@@ -774,6 +774,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Subscription Management Routes
+  app.get("/api/subscription/plans", requireAuth, async (req, res) => {
+    try {
+      const plans = await storage.getSubscriptionPlans(true); // Only active plans
+      res.json(plans);
+    } catch (error) {
+      console.error('[Subscription] Get plans error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/subscription/current", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const subscription = await storage.getTenantSubscription(user.tenantId);
+      res.json(subscription);
+    } catch (error) {
+      console.error('[Subscription] Get current error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/subscription/change", requireAuth, requireRole(['customer_admin']), async (req, res) => {
+    try {
+      const user = req.user;
+      const { planId, billingCycle } = req.body;
+      
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      if (!planId) {
+        return res.status(400).json({ message: "Plan ID is required" });
+      }
+
+      // Verify the plan exists
+      const plan = await storage.getSubscriptionPlan(planId);
+      if (!plan) {
+        return res.status(404).json({ message: "Subscription plan not found" });
+      }
+
+      // Calculate subscription dates
+      const startDate = new Date();
+      const endDate = new Date();
+      if (billingCycle === 'yearly') {
+        endDate.setFullYear(endDate.getFullYear() + 1);
+      } else {
+        endDate.setMonth(endDate.getMonth() + 1);
+      }
+
+      // Update tenant subscription
+      await storage.updateTenantSubscription(user.tenantId, {
+        planId,
+        subscriptionStatus: 'active',
+        startDate,
+        endDate,
+        nextBillingDate: endDate
+      });
+
+      res.json({ 
+        message: "Subscription updated successfully",
+        plan: plan.name,
+        billingCycle,
+        nextBillingDate: endDate
+      });
+    } catch (error) {
+      console.error('[Subscription] Change plan error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // Admin billing overview endpoint
   app.get("/api/admin/billing/overview", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
