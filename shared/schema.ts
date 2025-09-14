@@ -23,6 +23,7 @@ export const invoiceStatusEnum = pgEnum('invoice_status', ['pending', 'paid', 'f
 export const supportTicketStatusEnum = pgEnum('support_ticket_status', ['open', 'in_progress', 'resolved', 'closed']);
 export const provisioningJobStatusEnum = pgEnum('provisioning_job_status', ['queued', 'in_progress', 'done', 'error']);
 export const apiKeyServiceTypeEnum = pgEnum('api_key_service_type', ['stripe', 'openai', 'twilio', 'google', 'elevenlabs', 'heroku']);
+export const auditEventTypeEnum = pgEnum('audit_event_type', ['api_key_created', 'api_key_deleted', 'user_login', 'user_logout', 'password_change', 'role_change', 'sensitive_operation']);
 
 // Tenants table
 export const tenants = pgTable("tenants", {
@@ -139,6 +140,22 @@ export const apiKeys = pgTable("api_keys", {
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
 
+// Audit logs table
+export const auditLogs = pgTable("audit_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventType: auditEventTypeEnum("event_type").notNull(),
+  operation: varchar("operation", { length: 255 }).notNull(),
+  userId: uuid("user_id").references(() => users.id),
+  userEmail: varchar("user_email", { length: 255 }),
+  tenantId: uuid("tenant_id").references(() => tenants.id),
+  ipAddress: varchar("ip_address", { length: 45 }),
+  userAgent: text("user_agent"),
+  success: boolean("success").notNull(),
+  statusCode: integer("status_code"),
+  metadata: jsonb("metadata"),
+  timestamp: timestamp("timestamp").defaultNow().notNull()
+});
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   users: many(users),
@@ -154,7 +171,19 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     references: [tenants.id]
   }),
   authoredTickets: many(supportTickets, { relationName: "authored_tickets" }),
-  assignedTickets: many(supportTickets, { relationName: "assigned_tickets" })
+  assignedTickets: many(supportTickets, { relationName: "assigned_tickets" }),
+  auditLogs: many(auditLogs)
+}));
+
+export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
+  user: one(users, {
+    fields: [auditLogs.userId],
+    references: [users.id]
+  }),
+  tenant: one(tenants, {
+    fields: [auditLogs.tenantId],
+    references: [tenants.id]
+  })
 }));
 
 export const botsRelations = relations(bots, ({ one, many }) => ({
@@ -253,6 +282,11 @@ export const insertInvoiceSchema = createInsertSchema(invoices).omit({
   updatedAt: true
 });
 
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
+  id: true,
+  timestamp: true
+});
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
@@ -270,3 +304,5 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 export type Invoice = typeof invoices.$inferSelect;
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;

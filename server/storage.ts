@@ -8,6 +8,7 @@ import {
   provisioningJobs,
   apiKeys,
   billingAccounts,
+  auditLogs,
   type Tenant,
   type User, 
   type InsertUser, 
@@ -23,7 +24,9 @@ import {
   type ApiKey,
   type InsertApiKey,
   type Invoice,
-  type InsertInvoice
+  type InsertInvoice,
+  type AuditLog,
+  type InsertAuditLog
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -95,6 +98,18 @@ export interface IStorage {
   getInvoice(id: string): Promise<any | undefined>;
   createInvoice(invoice: any): Promise<any>;
   updateInvoice(id: string, updates: any): Promise<any>;
+
+  // Audit log operations
+  createAuditLog(auditLog: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(options?: {
+    limit?: number;
+    offset?: number;
+    tenantId?: string;
+    userId?: string;
+    eventType?: string;
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<AuditLog[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -413,6 +428,44 @@ export class DatabaseStorage implements IStorage {
       .where(eq(invoices.id, id))
       .returning();
     return invoice;
+  }
+
+  // Audit log operations
+  async createAuditLog(insertAuditLog: InsertAuditLog): Promise<AuditLog> {
+    const [auditLog] = await db.insert(auditLogs)
+      .values(insertAuditLog)
+      .returning();
+    return auditLog;
+  }
+
+  async getAuditLogs(options: {
+    limit?: number;
+    offset?: number;
+    tenantId?: string;
+    userId?: string;
+    eventType?: string;
+    startDate?: Date;
+    endDate?: Date;
+  } = {}): Promise<AuditLog[]> {
+    const { limit = 100, offset = 0, tenantId, userId, eventType, startDate, endDate } = options;
+    
+    const conditions = [];
+    if (tenantId) conditions.push(eq(auditLogs.tenantId, tenantId));
+    if (userId) conditions.push(eq(auditLogs.userId, userId));
+    if (eventType) conditions.push(eq(auditLogs.eventType, eventType as any));
+    if (startDate) conditions.push(gte(auditLogs.timestamp, startDate));
+    if (endDate) conditions.push(lte(auditLogs.timestamp, endDate));
+    
+    let query = db.select().from(auditLogs);
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+    
+    return await query
+      .orderBy(desc(auditLogs.timestamp))
+      .limit(limit)
+      .offset(offset);
   }
 }
 

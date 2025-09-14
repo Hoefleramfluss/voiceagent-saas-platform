@@ -130,7 +130,7 @@ export function requireExplicitConfirmation(req: ExtendedRequest, res: Response,
 
 /**
  * Audit logging middleware for sensitive operations
- * Logs detailed information about API key operations
+ * Logs detailed information about API key operations using response events for complete coverage
  */
 export function auditSensitiveOperation(operation: string) {
   return (req: ExtendedRequest, res: Response, next: NextFunction): void => {
@@ -138,19 +138,48 @@ export function auditSensitiveOperation(operation: string) {
     const ip = req.ip || req.connection.remoteAddress;
     const userAgent = req.get('User-Agent') || 'unknown';
     
-    // Log the attempt
-    console.log(`[SECURITY AUDIT] ${operation} attempt - User: ${user?.email || 'unknown'}, IP: ${ip}, UserAgent: ${userAgent}, Time: ${new Date().toISOString()}`);
+    // Import audit service dynamically to avoid circular dependencies
+    const auditServicePromise = import('./audit-service').then(m => m.auditService);
     
-    // Store original res.json to capture response
-    const originalJson = res.json;
-    res.json = function(body: any) {
+    // Track if we've already logged to prevent duplicate entries
+    let hasLogged = false;
+    
+    // Log when response finishes (covers all response methods)
+    const logAuditEvent = () => {
+      if (hasLogged) return;
+      hasLogged = true;
+      
       const statusCode = res.statusCode;
       const success = statusCode >= 200 && statusCode < 400;
       
-      console.log(`[SECURITY AUDIT] ${operation} ${success ? 'SUCCESS' : 'FAILED'} - User: ${user?.email || 'unknown'}, Status: ${statusCode}, IP: ${ip}, Time: ${new Date().toISOString()}`);
-      
-      return originalJson.call(this, body);
+      // Only log general middleware audit if the route doesn't handle specific audit logging
+      // This prevents double logging for API key operations that have their own audit calls
+      if (!req.route?.path?.includes('/api-keys')) {
+        auditServicePromise.then(auditService => {
+          auditService.logSensitiveOperation(
+            user || {},
+            operation,
+            success,
+            statusCode,
+            ip,
+            userAgent,
+            { 
+              method: req.method,
+              path: req.path,
+              queryParams: req.query,
+              // Exclude request body to prevent secret leakage - it's already redacted in AuditService
+              requestSummary: { method: req.method, path: req.path }
+            }
+          ).catch(error => {
+            console.error('[AUDIT ERROR] Failed to log sensitive operation:', error);
+          });
+        });
+      }
     };
+    
+    // Listen for response finish and close events to ensure we capture all response types
+    res.on('finish', logAuditEvent);
+    res.on('close', logAuditEvent);
     
     next();
   };

@@ -938,7 +938,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       invalidateKeyCache(apiKey.serviceType, apiKey.keyName);
       
       // AUDIT LOG: Record key creation
-      console.log(`[AUDIT] API Key Created - Service: ${apiKey.serviceType}, Name: ${apiKey.keyName}, Admin: ${(req.user as any)?.email || 'unknown'}, Time: ${new Date().toISOString()}`);
+      const { auditService } = await import('./audit-service');
+      await auditService.logApiKeyOperation(
+        req.user as any,
+        'created',
+        { serviceType: apiKey.serviceType, keyName: apiKey.keyName },
+        req.ip,
+        req.get('User-Agent')
+      ).catch(error => console.error('[AUDIT ERROR] Failed to log API key creation:', error));
       
       // SECURITY: Never return actual key values - return secure metadata only
       res.status(201).json({
@@ -1024,7 +1031,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       invalidateKeyCache(keyToDelete.serviceType, keyToDelete.keyName);
       
       // AUDIT LOG: Record key deletion
-      console.log(`[AUDIT] API Key Deleted - Service: ${keyToDelete.serviceType}, Name: ${keyToDelete.keyName}, Admin: ${(req.user as any)?.email || 'unknown'}, Time: ${new Date().toISOString()}`);
+      const { auditService } = await import('./audit-service');
+      await auditService.logApiKeyOperation(
+        req.user as any,
+        'deleted',
+        { serviceType: keyToDelete.serviceType, keyName: keyToDelete.keyName },
+        req.ip,
+        req.get('User-Agent')
+      ).catch(error => console.error('[AUDIT ERROR] Failed to log API key deletion:', error));
       
       res.sendStatus(204);
     } catch (error) {
