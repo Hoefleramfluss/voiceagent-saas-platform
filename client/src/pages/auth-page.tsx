@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useTranslation } from 'react-i18next';
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,7 @@ import { Loader2, Bot, Shield, Users, BarChart } from "lucide-react";
 
 export default function AuthPage() {
   const [, navigate] = useLocation();
+  const { t } = useTranslation();
   const { user, loginMutation, registerMutation } = useAuth();
   const [loginData, setLoginData] = useState({ email: "", password: "" });
   const [registerData, setRegisterData] = useState({
@@ -57,30 +59,30 @@ export default function AuthPage() {
             <div className="w-16 h-16 bg-primary rounded-xl flex items-center justify-center mx-auto mb-4">
               <Bot className="w-8 h-8 text-primary-foreground" />
             </div>
-            <h2 className="text-3xl font-bold text-foreground">Welcome to VoiceAgent</h2>
+            <h2 className="text-3xl font-bold text-foreground">{t('welcome')} VoiceAgent</h2>
             <p className="mt-2 text-muted-foreground">
-              The complete platform for VoiceBot management
+              Die vollständige Plattform für Voice-Bot-Management
             </p>
           </div>
 
           <Card>
             <Tabs defaultValue="login" className="w-full">
               <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login" data-testid="tab-login">Sign In</TabsTrigger>
-                <TabsTrigger value="register" data-testid="tab-register">Sign Up</TabsTrigger>
+                <TabsTrigger value="login" data-testid="tab-login">{t('signIn')}</TabsTrigger>
+                <TabsTrigger value="register" data-testid="tab-register">Registrieren</TabsTrigger>
               </TabsList>
               
               <TabsContent value="login">
                 <CardHeader>
-                  <CardTitle>Sign in to your account</CardTitle>
+                  <CardTitle>{t('signIn')} zu Ihrem Konto</CardTitle>
                   <CardDescription>
-                    Enter your credentials to access your dashboard
+                    Geben Sie Ihre Anmeldedaten ein, um auf Ihr Dashboard zuzugreifen
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleLogin} className="space-y-4">
                     <div className="space-y-2">
-                      <Label htmlFor="login-email">Email</Label>
+                      <Label htmlFor="login-email">{t('email')}</Label>
                       <Input
                         id="login-email"
                         type="email"
@@ -92,7 +94,7 @@ export default function AuthPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="login-password">Password</Label>
+                      <Label htmlFor="login-password">{t('password')}</Label>
                       <Input
                         id="login-password"
                         type="password"
@@ -111,7 +113,7 @@ export default function AuthPage() {
                       {loginMutation.isPending ? (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
                       ) : null}
-                      Sign In
+                      {t('signIn')}
                     </Button>
                   </form>
                 </CardContent>
@@ -119,16 +121,16 @@ export default function AuthPage() {
 
               <TabsContent value="register">
                 <CardHeader>
-                  <CardTitle>Create your account</CardTitle>
+                  <CardTitle>Erstellen Sie Ihr Konto</CardTitle>
                   <CardDescription>
-                    Get started with VoiceAgent platform today
+                    Beginnen Sie noch heute mit der VoiceAgent-Plattform
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleRegister} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="register-firstname">First Name</Label>
+                        <Label htmlFor="register-firstname">{t('firstName')}</Label>
                         <Input
                           id="register-firstname"
                           placeholder="John"
@@ -138,7 +140,7 @@ export default function AuthPage() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="register-lastname">Last Name</Label>
+                        <Label htmlFor="register-lastname">{t('lastName')}</Label>
                         <Input
                           id="register-lastname"
                           placeholder="Doe"
@@ -149,7 +151,7 @@ export default function AuthPage() {
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="register-email">Email</Label>
+                      <Label htmlFor="register-email">{t('email')}</Label>
                       <Input
                         id="register-email"
                         type="email"
@@ -161,7 +163,7 @@ export default function AuthPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="register-password">Password</Label>
+                      <Label htmlFor="register-password">{t('password')}</Label>
                       <Input
                         id="register-password"
                         type="password"
@@ -172,7 +174,7 @@ export default function AuthPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="register-confirm">Confirm Password</Label>
+                      <Label htmlFor="register-confirm">{t('confirmPassword')}</Label>
                       <Input
                         id="register-confirm"
                         type="password"
@@ -191,7 +193,7 @@ export default function AuthPage() {
                       {registerMutation.isPending ? (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
                       ) : null}
-                      Create Account
+                      Konto erstellen
                     </Button>
                   </form>
                 </CardContent>
@@ -208,32 +210,32 @@ export default function AuthPage() {
             <Bot className="w-10 h-10 text-primary-foreground" />
           </div>
           <h1 className="text-3xl font-bold text-foreground mb-6">
-            Complete VoiceBot Platform
+            Vollständige Voice-Bot-Plattform
           </h1>
           <div className="space-y-4 text-left">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <Shield className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Multi-tenant architecture</span>
+              <span className="text-muted-foreground">Multi-Mandanten-Architektur</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <Users className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Customer management</span>
+              <span className="text-muted-foreground">Kundenverwaltung</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <BarChart className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Usage tracking & billing</span>
+              <span className="text-muted-foreground">Nutzungserfassung & Abrechnung</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <Bot className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Automated bot provisioning</span>
+              <span className="text-muted-foreground">Automatisierte Bot-Bereitstellung</span>
             </div>
           </div>
         </div>

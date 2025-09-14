@@ -1,5 +1,6 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
+import { useTranslation } from 'react-i18next';
 import { Button } from "@/components/ui/button";
 import { 
   Bot, 
@@ -12,21 +13,25 @@ import {
   LogOut
 } from "lucide-react";
 
-const navigation = [
-  { name: "Overview", href: "/", icon: BarChart },
-  { name: "Usage & Analytics", href: "/usage", icon: Phone },
-  { name: "Billing & Invoices", href: "/billing", icon: Receipt },
-  { name: "Support", href: "/support", icon: Headphones },
+const getNavigation = (t: any) => [
+  { name: t('overview'), href: "/", icon: BarChart },
+  { name: t('usage') + " & Analytik", href: "/usage", icon: Phone },
+  { name: t('billing') + " & Rechnungen", href: "/billing", icon: Receipt },
+  { name: t('support'), href: "/support", icon: Headphones },
 ];
 
-const accountNavigation = [
-  { name: "Profile Settings", href: "/profile", icon: User },
-  { name: "API Keys", href: "/api-keys", icon: Key },
+const getAccountNavigation = (t: any) => [
+  { name: "Profil-" + t('settings'), href: "/profile", icon: User },
+  { name: t('apiKeys'), href: "/api-keys", icon: Key },
 ];
 
 export default function CustomerSidebar() {
+  const { t } = useTranslation();
   const { user, logoutMutation } = useAuth();
   const [location, navigate] = useLocation();
+  
+  const navigation = getNavigation(t);
+  const accountNavigation = getAccountNavigation(t);
 
   const handleLogout = () => {
     logoutMutation.mutate();
@@ -41,7 +46,7 @@ export default function CustomerSidebar() {
         </div>
         <div>
           <h1 className="text-lg font-semibold text-foreground">VoiceAgent</h1>
-          <p className="text-xs text-muted-foreground">Customer Portal</p>
+          <p className="text-xs text-muted-foreground">Kunden-Portal</p>
         </div>
       </div>
 
@@ -69,7 +74,7 @@ export default function CustomerSidebar() {
         
         <div className="pt-4 border-t border-border">
           <p className="px-3 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-            Account
+            {t('account')}
           </p>
           {accountNavigation.map((item) => {
             const Icon = item.icon;
