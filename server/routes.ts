@@ -6,15 +6,64 @@ import { storage } from "./storage";
 import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema } from "@shared/schema";
 import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
+import { keyLoader, getStripeKey, invalidateKeyCache } from "./key-loader";
+import { 
+  apiKeyRateLimit, 
+  criticalKeyOperationsRateLimit, 
+  requireRecentAuth, 
+  requireExplicitConfirmation, 
+  auditSensitiveOperation, 
+  requireAllowedIP, 
+  logApiKeyAccess, 
+  validateOperationPermissions 
+} from "./security-controls";
 
-// Initialize Stripe only if the secret key is available
+// Stripe instance - will be initialized dynamically when needed
 let stripe: Stripe | null = null;
-if (process.env.STRIPE_SECRET_KEY) {
-  stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: "2023-10-16",
-  });
-} else {
-  console.warn('Warning: STRIPE_SECRET_KEY not found. Stripe functionality will be disabled.');
+
+/**
+ * Initialize Stripe with keys from database or environment
+ * Uses secure key loader to fetch encrypted keys at runtime
+ */
+async function initializeStripe(): Promise<Stripe | null> {
+  if (stripe) {
+    return stripe; // Already initialized
+  }
+
+  try {
+    // First try to get from secure key loader (database)
+    let stripeKey = await getStripeKey();
+    
+    // Fallback to environment variable for backward compatibility
+    if (!stripeKey && process.env.STRIPE_SECRET_KEY) {
+      stripeKey = process.env.STRIPE_SECRET_KEY;
+      console.warn('[Stripe] Using environment variable fallback. Consider storing in database for security.');
+    }
+
+    if (stripeKey) {
+      stripe = new Stripe(stripeKey, {
+        apiVersion: "2025-08-27.basil",
+      });
+      console.log('[Stripe] Successfully initialized with database-managed key');
+      return stripe;
+    } else {
+      console.warn('[Stripe] No valid key found in database or environment. Stripe functionality disabled.');
+      return null;
+    }
+  } catch (error) {
+    console.error('[Stripe] Failed to initialize:', error);
+    return null;
+  }
+}
+
+/**
+ * Get initialized Stripe instance
+ */
+async function getStripe(): Promise<Stripe | null> {
+  if (!stripe) {
+    return await initializeStripe();
+  }
+  return stripe;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -326,8 +375,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Stripe billing
   app.post("/api/billing/create-payment-intent", requireAuth, async (req, res) => {
     try {
-      if (!stripe) {
-        return res.status(503).json({ message: "Stripe not configured. Payment processing unavailable." });
+      const stripeInstance = await getStripe();
+      if (!stripeInstance) {
+        return res.status(503).json({ 
+          message: "Stripe not configured. Please add Stripe API keys in admin settings." 
+        });
       }
       
       const { amount } = req.body;
@@ -335,12 +387,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Valid payment amount required" });
       }
       
-      const paymentIntent = await stripe.paymentIntents.create({
+      const paymentIntent = await stripeInstance.paymentIntents.create({
         amount: Math.round(amount * 100),
         currency: "eur",
       });
       res.json({ clientSecret: paymentIntent.client_secret });
     } catch (error: any) {
+      console.error('[Stripe] Payment intent creation failed:', error);
       res.status(500).json({ message: "Error creating payment intent: " + error.message });
     }
   });
@@ -384,21 +437,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // API Key management (Platform Admin only)
-  app.get("/api/admin/api-keys", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+  app.get("/api/admin/api-keys", 
+    apiKeyRateLimit,
+    logApiKeyAccess,
+    requireAuth, 
+    requireRole(['platform_admin']), 
+    validateOperationPermissions(['platform_admin']),
+    auditSensitiveOperation('LIST_API_KEYS'),
+    async (req, res) => {
     try {
       const apiKeys = await storage.getApiKeys();
-      // Return masked version for security
-      const maskedKeys = apiKeys.map(key => ({
-        ...key,
-        keyValue: maskApiKey(decryptApiKey(key.keyValue))
+      // CRITICAL SECURITY: Never return actual key values, not even masked ones
+      // Instead, return metadata only with a generic mask
+      const secureKeys = apiKeys.map(key => ({
+        id: key.id,
+        keyName: key.keyName,
+        serviceType: key.serviceType,
+        description: key.description,
+        isActive: key.isActive,
+        createdAt: key.createdAt,
+        updatedAt: key.updatedAt,
+        // Never expose actual values - use generic masking
+        keyValue: '••••••••••••' + (key.keyName ? key.keyName.slice(-4) : 'key')
       }));
-      res.json(maskedKeys);
+      res.json(secureKeys);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }
   });
 
-  app.post("/api/admin/api-keys", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+  app.post("/api/admin/api-keys", 
+    criticalKeyOperationsRateLimit,
+    logApiKeyAccess,
+    requireAuth, 
+    requireRole(['platform_admin']), 
+    validateOperationPermissions(['platform_admin']),
+    requireRecentAuth,
+    requireAllowedIP,
+    auditSensitiveOperation('CREATE_API_KEY'),
+    async (req, res) => {
     try {
       const validation = insertApiKeySchema.safeParse(req.body);
       
@@ -409,49 +486,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Encrypt the key value before storing
-      const encryptedValue = encryptApiKey(validation.data.keyValue);
+      // Encrypt the key value before storing (now async)
+      const encryptedValue = await encryptApiKey(validation.data.keyValue);
       const apiKey = await storage.createApiKey({
         ...validation.data,
         keyValue: encryptedValue
       });
 
-      // Return the created key with masked value
+      // Invalidate key cache since we added a new key
+      invalidateKeyCache(apiKey.serviceType, apiKey.keyName);
+      
+      // AUDIT LOG: Record key creation
+      console.log(`[AUDIT] API Key Created - Service: ${apiKey.serviceType}, Name: ${apiKey.keyName}, Admin: ${(req.user as any)?.email || 'unknown'}, Time: ${new Date().toISOString()}`);
+      
+      // SECURITY: Never return actual key values - return secure metadata only
       res.status(201).json({
-        ...apiKey,
-        keyValue: maskApiKey(validation.data.keyValue)
+        id: apiKey.id,
+        keyName: apiKey.keyName,
+        serviceType: apiKey.serviceType,
+        description: apiKey.description,
+        isActive: apiKey.isActive,
+        createdAt: apiKey.createdAt,
+        updatedAt: apiKey.updatedAt,
+        keyValue: '••••••••••••' + (apiKey.keyName ? apiKey.keyName.slice(-4) : 'key')
       });
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }
   });
 
-  app.patch("/api/admin/api-keys/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+  app.patch("/api/admin/api-keys/:id", 
+    criticalKeyOperationsRateLimit,
+    logApiKeyAccess,
+    requireAuth, 
+    requireRole(['platform_admin']), 
+    validateOperationPermissions(['platform_admin']),
+    requireRecentAuth,
+    auditSensitiveOperation('UPDATE_API_KEY'),
+    async (req, res) => {
     try {
       const { id } = req.params;
       const updates = { ...req.body };
       
-      // If keyValue is being updated, encrypt it
+      // If keyValue is being updated, encrypt it (now async)
       if (updates.keyValue) {
-        updates.keyValue = encryptApiKey(updates.keyValue);
+        updates.keyValue = await encryptApiKey(updates.keyValue);
       }
 
       const apiKey = await storage.updateApiKey(id, updates);
       
-      // Return with masked value
+      // Invalidate key cache since the key was updated
+      invalidateKeyCache(apiKey.serviceType, apiKey.keyName);
+      
+      // AUDIT LOG: Record key update
+      console.log(`[AUDIT] API Key Updated - Service: ${apiKey.serviceType}, Name: ${apiKey.keyName}, Admin: ${(req.user as any)?.email || 'unknown'}, Updated Fields: ${Object.keys(req.body).join(', ')}, Time: ${new Date().toISOString()}`);
+      
+      // SECURITY: Never return actual key values - return secure metadata only
       res.json({
-        ...apiKey,
-        keyValue: maskApiKey(decryptApiKey(apiKey.keyValue))
+        id: apiKey.id,
+        keyName: apiKey.keyName,
+        serviceType: apiKey.serviceType,
+        description: apiKey.description,
+        isActive: apiKey.isActive,
+        createdAt: apiKey.createdAt,
+        updatedAt: apiKey.updatedAt,
+        keyValue: '••••••••••••' + (apiKey.keyName ? apiKey.keyName.slice(-4) : 'key')
       });
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }
   });
 
-  app.delete("/api/admin/api-keys/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+  app.delete("/api/admin/api-keys/:id", 
+    criticalKeyOperationsRateLimit,
+    logApiKeyAccess,
+    requireAuth, 
+    requireRole(['platform_admin']), 
+    validateOperationPermissions(['platform_admin']),
+    requireRecentAuth,
+    requireAllowedIP,
+    requireExplicitConfirmation,
+    auditSensitiveOperation('DELETE_API_KEY'),
+    async (req, res) => {
     try {
       const { id } = req.params;
+      
+      // Get key details before deletion for audit logging
+      const keyToDelete = await storage.getApiKey(id);
+      if (!keyToDelete) {
+        return res.status(404).json({ message: "API key not found" });
+      }
+      
       await storage.deleteApiKey(id);
+      
+      // Invalidate key cache
+      invalidateKeyCache(keyToDelete.serviceType, keyToDelete.keyName);
+      
+      // AUDIT LOG: Record key deletion
+      console.log(`[AUDIT] API Key Deleted - Service: ${keyToDelete.serviceType}, Name: ${keyToDelete.keyName}, Admin: ${(req.user as any)?.email || 'unknown'}, Time: ${new Date().toISOString()}`);
+      
       res.sendStatus(204);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
