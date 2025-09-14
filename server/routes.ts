@@ -775,7 +775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Subscription Management Routes
-  app.get("/api/subscription/plans", requireAuth, async (req, res) => {
+  app.get("/api/subscription/plans", requireAuth, requireTenantAccess, async (req, res) => {
     try {
       const plans = await storage.getSubscriptionPlans(true); // Only active plans
       res.json(plans);
@@ -785,7 +785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/subscription/current", requireAuth, async (req, res) => {
+  app.get("/api/subscription/current", requireAuth, requireTenantAccess, async (req, res) => {
     try {
       const user = req.user;
       if (!user?.tenantId) {
@@ -800,23 +800,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/subscription/change", requireAuth, requireRole(['customer_admin']), async (req, res) => {
+  app.post("/api/subscription/change", requireAuth, requireTenantAccess, requireRole(['customer_admin', 'platform_admin']), async (req, res) => {
     try {
       const user = req.user;
-      const { planId, billingCycle } = req.body;
+      
+      // Validate input using Zod
+      const subscriptionChangeSchema = z.object({
+        planId: z.string().uuid("Plan ID must be a valid UUID"),
+        billingCycle: z.enum(['monthly', 'yearly'], { 
+          errorMap: () => ({ message: "Billing cycle must be 'monthly' or 'yearly'" })
+        })
+      });
+      
+      const validation = subscriptionChangeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Invalid input", 
+          errors: validation.error.issues 
+        });
+      }
+      
+      const { planId, billingCycle } = validation.data;
       
       if (!user?.tenantId) {
         return res.status(401).json({ message: "Tenant ID required" });
       }
 
-      if (!planId) {
-        return res.status(400).json({ message: "Plan ID is required" });
-      }
-
-      // Verify the plan exists
+      // Verify the plan exists and is active
       const plan = await storage.getSubscriptionPlan(planId);
-      if (!plan) {
-        return res.status(404).json({ message: "Subscription plan not found" });
+      if (!plan || plan.status !== 'active') {
+        return res.status(404).json({ message: "Subscription plan not found or inactive" });
       }
 
       // Calculate subscription dates
