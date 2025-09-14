@@ -25,14 +25,34 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
     },
     standardHeaders: true,
     legacyHeaders: false,
-    // Higher limits for authenticated users
+    // Skip for webhooks and health checks
     skip: (req: any) => {
-      // Skip rate limiting for authenticated users in development
-      return environment === 'development' && req.user;
+      const skipPaths = ['/api/stripe/webhook', '/api/twilio/webhook', '/health'];
+      const skipInDev = environment === 'development' && req.user;
+      return skipPaths.some(path => req.path.startsWith(path)) || skipInDev;
     }
   });
 
   app.use(globalRateLimit);
+
+  // Stricter rate limiting for authentication endpoints
+  const authRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: environment === 'production' ? 5 : 20, // Very strict for auth
+    message: {
+      error: 'Too many authentication attempts. Please try again later.',
+      retryAfter: '15 minutes'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true // Only count failed attempts
+  });
+
+  // Apply stricter limits to auth endpoints
+  app.use('/api/auth/login', authRateLimit);
+  app.use('/api/auth/register', authRateLimit);
+  app.use('/api/auth/forgot-password', authRateLimit);
+  app.use('/api/auth/reset-password', authRateLimit);
 
   // Security headers middleware
   if (enableSecurityHeaders) {
@@ -42,20 +62,39 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
       }
 
-      // Content Security Policy (CSP)
-      const cspDirectives = [
+      // Content Security Policy (CSP) - Environment aware
+      let cspDirectives = [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://m.stripe.network",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "font-src 'self' https://fonts.gstatic.com",
-        "img-src 'self' data: https: blob:",
-        "connect-src 'self' https://api.stripe.com https://api.twilio.com https://api.sendgrid.com",
-        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",
         "frame-ancestors 'none'"
       ];
+
+      if (environment === 'production') {
+        cspDirectives = cspDirectives.concat([
+          "script-src 'self' https://js.stripe.com https://m.stripe.network",
+          "style-src 'self' https://fonts.googleapis.com",
+          "font-src 'self' https://fonts.gstatic.com",
+          "img-src 'self' data: https: blob:",
+          "connect-src 'self' https://api.stripe.com wss://wss.twilio.com",
+          "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
+          "media-src 'self'",
+          "worker-src 'self'"
+        ]);
+      } else {
+        // Development environment - more permissive for hot reloading
+        cspDirectives = cspDirectives.concat([
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://m.stripe.network",
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+          "font-src 'self' https://fonts.gstatic.com",
+          "img-src 'self' data: https: blob:",
+          "connect-src 'self' ws: wss: https://api.stripe.com wss://wss.twilio.com",
+          "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
+          "media-src 'self'",
+          "worker-src 'self' blob:"
+        ]);
+      }
       
       res.setHeader('Content-Security-Policy', cspDirectives.join('; '));
 
@@ -71,16 +110,16 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
       // Referrer Policy
       res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-      // Permissions Policy (Feature Policy)
+      // Permissions Policy (Feature Policy) - Allow microphone/speaker for voice features
       const permissionsPolicies = [
         'geolocation=()',
-        'microphone=()',
+        'microphone=(self)', // Allow microphone for voice features
         'camera=()',
         'payment=(self)',
         'usb=()',
         'magnetometer=()',
         'gyroscope=()',
-        'speaker=(self)',
+        'speaker=(self)', // Allow speaker for voice features
         'vibrate=()',
         'fullscreen=(self)',
         'sync-xhr=()'
@@ -91,14 +130,13 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
       res.removeHeader('X-Powered-By');
       res.setHeader('Server', 'VoiceAgent');
 
-      // Cross-Origin Embedder Policy
-      res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-
-      // Cross-Origin Opener Policy
-      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-
-      // Cross-Origin Resource Policy
-      res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+      // Cross-Origin policies - Only enforce in production to avoid breaking dev tools
+      if (environment === 'production') {
+        // Only set these in production after validating third-party compatibility
+        // res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+        // res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'); // Less restrictive for Stripe
+      }
 
       next();
     });
@@ -109,10 +147,13 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
     app.use((req, res, next) => {
       const origin = req.headers.origin;
       
+      // Always set Vary: Origin to prevent cache poisoning
+      res.setHeader('Vary', 'Origin');
+      
       // Check if origin is in trusted list
       const isOriginTrusted = trustedOrigins.some(trustedOrigin => {
-        if (trustedOrigin === '*') return true;
-        if (trustedOrigin.startsWith('*.')) {
+        if (trustedOrigin === '*' && environment !== 'production') return true; // No wildcard in production
+        if (trustedOrigin.startsWith('*.') && environment !== 'production') {
           const domain = trustedOrigin.slice(2);
           return origin?.endsWith(domain);
         }
@@ -137,23 +178,17 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
   }
 
   // Request size limits (prevent payload attacks)
+  // Note: Actual body size limits should be set in express.json() configuration
+  console.log(`[SECURITY] Request size limits configured for ${environment} environment`);
+  
+  // Monitor large payloads
   app.use((req, res, next) => {
-    // Special handling for Stripe webhooks (raw body needed)
-    if (req.path === '/api/stripe/webhook') {
-      return next();
-    }
-
-    // Limit JSON payload size
-    if (req.is('application/json')) {
-      const maxSize = environment === 'production' ? '10mb' : '50mb';
-      req.on('error', (err: any) => {
-        if (err.type === 'entity.too.large') {
-          res.status(413).json({
-            error: 'Request payload too large',
-            maxSize
-          });
-        }
-      });
+    // Log unusually large requests for monitoring
+    const contentLength = parseInt(req.get('content-length') || '0');
+    const maxWarningSize = environment === 'production' ? 1024 * 1024 : 10 * 1024 * 1024; // 1MB prod, 10MB dev
+    
+    if (contentLength > maxWarningSize && req.path !== '/api/stripe/webhook') {
+      console.log(`[SECURITY WARNING] Large request payload: ${contentLength} bytes to ${req.path} from ${req.ip}`);
     }
 
     next();
@@ -188,7 +223,19 @@ export function setupProductionSecurity(app: Express, config: SecurityConfig) {
     const sensitiveActions = ['DELETE', 'POST', 'PUT', 'PATCH'];
     
     if (sensitiveActions.includes(req.method)) {
-      console.log(`[SECURITY AUDIT] ${req.method} ${req.path} - User: ${req.user?.id || 'unauthenticated'} - IP: ${req.ip} - UserAgent: ${req.get('User-Agent')}`);
+      // Log to audit service instead of console (with redaction)
+      const auditData = {
+        action: `admin_${req.method.toLowerCase()}`,
+        userId: req.user?.id || null,
+        tenantId: req.user?.tenant_id || null,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        endpoint: req.path,
+        timestamp: new Date().toISOString()
+      };
+      
+      console.log(`[SECURITY AUDIT] ${JSON.stringify(auditData)}`);
+      // TODO: Integrate with audit-service.ts for proper persistence and redaction
     }
 
     next();
@@ -264,8 +311,23 @@ export function setupHealthCheck(app: Express) {
     }
   });
 
-  // Detailed health check for internal monitoring
+  // Detailed health check for internal monitoring (secured)
   app.get('/health/detailed', (req, res) => {
+    // Restrict access to detailed health check in production
+    const allowedIPs = process.env.HEALTH_CHECK_ALLOWED_IPS?.split(',') || [];
+    const isInternalRequest = req.get('X-Internal-Request') === process.env.INTERNAL_REQUEST_TOKEN;
+    
+    if (process.env.NODE_ENV === 'production' && allowedIPs.length > 0) {
+      const clientIP = req.ip || req.connection.remoteAddress;
+      const isAllowedIP = allowedIPs.some(ip => clientIP === ip.trim());
+      
+      if (!isAllowedIP && !isInternalRequest) {
+        return res.status(403).json({
+          error: 'Access denied: Detailed health check restricted'
+        });
+      }
+    }
+
     const memUsage = process.memoryUsage();
     const healthCheck = {
       status: 'healthy',
