@@ -61,7 +61,7 @@ export default function AuthPage() {
             </div>
             <h2 className="text-3xl font-bold text-foreground">{t('welcome')} VoiceAgent</h2>
             <p className="mt-2 text-muted-foreground">
-              Die vollständige Plattform für Voice-Bot-Management
+              {t('platformDescription')}
             </p>
           </div>
 
@@ -69,14 +69,14 @@ export default function AuthPage() {
             <Tabs defaultValue="login" className="w-full">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="login" data-testid="tab-login">{t('signIn')}</TabsTrigger>
-                <TabsTrigger value="register" data-testid="tab-register">Registrieren</TabsTrigger>
+                <TabsTrigger value="register" data-testid="tab-register">{t('register')}</TabsTrigger>
               </TabsList>
               
               <TabsContent value="login">
                 <CardHeader>
-                  <CardTitle>{t('signIn')} zu Ihrem Konto</CardTitle>
+                  <CardTitle>{t('signInToAccount')}</CardTitle>
                   <CardDescription>
-                    Geben Sie Ihre Anmeldedaten ein, um auf Ihr Dashboard zuzugreifen
+                    {t('enterCredentials')}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -121,9 +121,9 @@ export default function AuthPage() {
 
               <TabsContent value="register">
                 <CardHeader>
-                  <CardTitle>Erstellen Sie Ihr Konto</CardTitle>
+                  <CardTitle>{t('createAccount')}</CardTitle>
                   <CardDescription>
-                    Beginnen Sie noch heute mit der VoiceAgent-Plattform
+                    {t('startToday')}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -193,7 +193,7 @@ export default function AuthPage() {
                       {registerMutation.isPending ? (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
                       ) : null}
-                      Konto erstellen
+                      {t('createAccountButton')}
                     </Button>
                   </form>
                 </CardContent>
@@ -210,32 +210,32 @@ export default function AuthPage() {
             <Bot className="w-10 h-10 text-primary-foreground" />
           </div>
           <h1 className="text-3xl font-bold text-foreground mb-6">
-            Vollständige Voice-Bot-Plattform
+            {t('fullVoiceBotPlatform')}
           </h1>
           <div className="space-y-4 text-left">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <Shield className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Multi-Mandanten-Architektur</span>
+              <span className="text-muted-foreground">{t('multiTenantArchitecture')}</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <Users className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Kundenverwaltung</span>
+              <span className="text-muted-foreground">{t('customerManagement')}</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <BarChart className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Nutzungserfassung & Abrechnung</span>
+              <span className="text-muted-foreground">{t('usageTracking')}</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                 <Bot className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-muted-foreground">Automatisierte Bot-Bereitstellung</span>
+              <span className="text-muted-foreground">{t('automatedDeployment')}</span>
             </div>
           </div>
         </div>

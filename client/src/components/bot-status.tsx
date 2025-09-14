@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ interface BotStatusProps {
 }
 
 export default function BotStatus({ bot }: BotStatusProps) {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const [isTestingBot, setIsTestingBot] = useState(false);
 
@@ -41,14 +43,14 @@ export default function BotStatus({ bot }: BotStatusProps) {
     },
     onSuccess: () => {
       toast({
-        title: "VoiceBot test successful",
-        description: "Your VoiceBot is responding correctly to test calls.",
+        title: t('voiceBotTestSuccessful'),
+        description: t('voiceBotTestSuccessfulDesc'),
       });
     },
     onError: (error) => {
       toast({
-        title: "VoiceBot test failed",
-        description: error.message || "There was an issue testing your VoiceBot.",
+        title: t('voiceBotTestFailed'),
+        description: error.message || t('voiceBotTestFailedDesc'),
         variant: "destructive",
       });
     },
@@ -88,14 +90,14 @@ export default function BotStatus({ bot }: BotStatusProps) {
   const getStatusMessage = (status: string) => {
     switch (status) {
       case 'ready':
-        return 'Your VoiceBot is online and ready to receive calls';
+        return t('voiceBotOnline');
       case 'provisioning':
-        return 'Setting up your VoiceBot infrastructure...';
+        return t('voiceBotProvisioning');
       case 'failed':
-        return 'VoiceBot setup failed. Contact support for assistance';
+        return t('voiceBotFailed');
       case 'pending':
       default:
-        return 'VoiceBot is queued for provisioning';
+        return t('voiceBotPending');
     }
   };
 
@@ -125,7 +127,7 @@ export default function BotStatus({ bot }: BotStatusProps) {
             </div>
             <div>
               <CardTitle className="text-lg">{bot.name}</CardTitle>
-              <CardDescription>VoiceBot Configuration</CardDescription>
+              <CardDescription>{t('voiceBotConfiguration')}</CardDescription>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -156,17 +158,17 @@ export default function BotStatus({ bot }: BotStatusProps) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Phone className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">Phone Number</span>
+                  <span className="text-sm font-medium text-foreground">{t('phoneNumber')}</span>
                 </div>
                 <span className="text-sm font-mono text-foreground" data-testid="bot-phone-number">
-                  {bot.twilioNumber || 'Not assigned'}
+                  {bot.twilioNumber || t('notAssigned')}
                 </span>
               </div>
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Globe className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">Language</span>
+                  <span className="text-sm font-medium text-foreground">{t('language')}</span>
                 </div>
                 <Badge variant="outline" data-testid="bot-locale">
                   {bot.locale}
@@ -178,7 +180,7 @@ export default function BotStatus({ bot }: BotStatusProps) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <MessageSquare className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">Speech-to-Text</span>
+                  <span className="text-sm font-medium text-foreground">{t('speechToText')}</span>
                 </div>
                 <Badge variant="secondary" className="capitalize" data-testid="bot-stt-provider">
                   {bot.sttProvider}
@@ -188,7 +190,7 @@ export default function BotStatus({ bot }: BotStatusProps) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Volume2 className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">Text-to-Speech</span>
+                  <span className="text-sm font-medium text-foreground">{t('textToSpeech')}</span>
                 </div>
                 <Badge variant="secondary" className="capitalize" data-testid="bot-tts-provider">
                   {bot.ttsProvider}
@@ -204,7 +206,7 @@ export default function BotStatus({ bot }: BotStatusProps) {
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <MessageSquare className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">Greeting Message</span>
+                  <span className="text-sm font-medium text-foreground">{t('greetingMessage')}</span>
                 </div>
                 <div className="bg-muted/50 p-3 rounded-md">
                   <p className="text-sm text-foreground italic" data-testid="bot-greeting-message">
@@ -231,7 +233,7 @@ export default function BotStatus({ bot }: BotStatusProps) {
                   ) : (
                     <Play className="w-4 h-4 mr-2" />
                   )}
-                  {isTestingBot ? 'Testing...' : 'Test VoiceBot'}
+                  {isTestingBot ? t('testing') : t('testVoiceBot')}
                 </Button>
                 <Button 
                   variant="outline" 
@@ -239,7 +241,7 @@ export default function BotStatus({ bot }: BotStatusProps) {
                   data-testid="button-configure-bot"
                 >
                   <Settings className="w-4 h-4 mr-2" />
-                  Configure
+                  {t('configure')}
                 </Button>
               </>
             ) : bot.status === 'failed' ? (
@@ -249,13 +251,13 @@ export default function BotStatus({ bot }: BotStatusProps) {
                 data-testid="button-retry-provisioning"
               >
                 <RefreshCw className="w-4 h-4 mr-2" />
-                Retry Setup
+                {t('retrySetup')}
               </Button>
             ) : (
               <div className="flex items-center justify-center py-2">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Clock className="w-4 h-4 animate-pulse" />
-                  <span className="text-sm">Setup in progress...</span>
+                  <span className="text-sm">{t('setupInProgress')}</span>
                 </div>
               </div>
             )}
@@ -264,15 +266,15 @@ export default function BotStatus({ bot }: BotStatusProps) {
           {/* Bot Info */}
           <div className="text-xs text-muted-foreground space-y-1">
             <div className="flex items-center justify-between">
-              <span>Created:</span>
+              <span>{t('created')}:</span>
               <span>{new Date(bot.createdAt).toLocaleDateString()}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Last updated:</span>
+              <span>{t('lastUpdated')}:</span>
               <span>{new Date(bot.updatedAt).toLocaleDateString()}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Bot ID:</span>
+              <span>{t('botId')}:</span>
               <span className="font-mono">{bot.id.slice(0, 8)}</span>
             </div>
           </div>
