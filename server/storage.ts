@@ -9,6 +9,7 @@ import {
   apiKeys,
   billingAccounts,
   auditLogs,
+  subscriptionPlans,
   type Tenant,
   type User, 
   type InsertUser, 
@@ -26,7 +27,8 @@ import {
   type Invoice,
   type InsertInvoice,
   type AuditLog,
-  type InsertAuditLog
+  type InsertAuditLog,
+  type SubscriptionPlan
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -90,7 +92,17 @@ export interface IStorage {
 
   // Billing operations
   createBillingAccount(billingAccount: { tenantId: string; stripeCustomerId: string }): Promise<void>;
-  getBillingAccount(tenantId: string): Promise<{ tenantId: string; stripeCustomerId: string; stripeSubscriptionId?: string } | undefined>;
+  getBillingAccount(tenantId: string): Promise<{ 
+    tenantId: string; 
+    stripeCustomerId: string; 
+    stripeSubscriptionId?: string;
+    currentPlanId?: string;
+    subscriptionStatus?: string;
+    subscriptionStartDate?: Date;
+    subscriptionEndDate?: Date;
+    paymentMethodId?: string;
+    nextBillingDate?: Date;
+  } | undefined>;
   updateBillingAccount(tenantId: string, updates: { stripeSubscriptionId?: string }): Promise<void>;
 
   // Invoice operations
@@ -110,6 +122,22 @@ export interface IStorage {
     startDate?: Date;
     endDate?: Date;
   }): Promise<AuditLog[]>;
+
+  // Subscription management
+  getSubscriptionPlans(activeOnly?: boolean): Promise<SubscriptionPlan[]>;
+  getSubscriptionPlan(planId: string): Promise<SubscriptionPlan | null>;
+  updateTenantSubscription(tenantId: string, data: {
+    planId: string;
+    subscriptionStatus?: string;
+    startDate?: Date;
+    endDate?: Date;
+    paymentMethodId?: string;
+    nextBillingDate?: Date;
+  }): Promise<void>;
+  getTenantSubscription(tenantId: string): Promise<{
+    plan: SubscriptionPlan | null;
+    billingAccount: any;
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -380,7 +408,17 @@ export class DatabaseStorage implements IStorage {
       });
   }
 
-  async getBillingAccount(tenantId: string): Promise<{ tenantId: string; stripeCustomerId: string; stripeSubscriptionId?: string } | undefined> {
+  async getBillingAccount(tenantId: string): Promise<{ 
+    tenantId: string; 
+    stripeCustomerId: string; 
+    stripeSubscriptionId?: string;
+    currentPlanId?: string;
+    subscriptionStatus?: string;
+    subscriptionStartDate?: Date;
+    subscriptionEndDate?: Date;
+    paymentMethodId?: string;
+    nextBillingDate?: Date;
+  } | undefined> {
     const [account] = await db.select()
       .from(billingAccounts)
       .where(eq(billingAccounts.tenantId, tenantId));
@@ -390,7 +428,13 @@ export class DatabaseStorage implements IStorage {
     return {
       tenantId: account.tenantId,
       stripeCustomerId: account.stripeCustomerId,
-      stripeSubscriptionId: account.stripeSubscriptionId || undefined
+      stripeSubscriptionId: account.stripeSubscriptionId || undefined,
+      currentPlanId: account.currentPlanId || undefined,
+      subscriptionStatus: account.subscriptionStatus || undefined,
+      subscriptionStartDate: account.subscriptionStartDate || undefined,
+      subscriptionEndDate: account.subscriptionEndDate || undefined,
+      paymentMethodId: account.paymentMethodId || undefined,
+      nextBillingDate: account.nextBillingDate || undefined
     };
   }
 
@@ -466,6 +510,71 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(auditLogs.timestamp))
       .limit(limit)
       .offset(offset);
+  }
+  
+  // Subscription management implementation
+  async getSubscriptionPlans(activeOnly = false): Promise<SubscriptionPlan[]> {
+    if (activeOnly) {
+      return await db
+        .select()
+        .from(subscriptionPlans)
+        .where(eq(subscriptionPlans.status, 'active'))
+        .orderBy(subscriptionPlans.sortOrder);
+    }
+    
+    return await db
+      .select()
+      .from(subscriptionPlans)
+      .orderBy(subscriptionPlans.sortOrder);
+  }
+
+  async getSubscriptionPlan(planId: string): Promise<SubscriptionPlan | null> {
+    const plans = await db
+      .select()
+      .from(subscriptionPlans)
+      .where(eq(subscriptionPlans.id, planId))
+      .limit(1);
+    
+    return plans[0] || null;
+  }
+
+  async updateTenantSubscription(tenantId: string, data: {
+    planId: string;
+    subscriptionStatus?: string;
+    startDate?: Date;
+    endDate?: Date;
+    paymentMethodId?: string;
+    nextBillingDate?: Date;
+  }): Promise<void> {
+    const updateData: any = {
+      currentPlanId: data.planId,
+      updatedAt: new Date()
+    };
+    
+    if (data.subscriptionStatus) updateData.subscriptionStatus = data.subscriptionStatus;
+    if (data.startDate) updateData.subscriptionStartDate = data.startDate;
+    if (data.endDate) updateData.subscriptionEndDate = data.endDate;
+    if (data.paymentMethodId) updateData.paymentMethodId = data.paymentMethodId;
+    if (data.nextBillingDate) updateData.nextBillingDate = data.nextBillingDate;
+    
+    await db
+      .update(billingAccounts)
+      .set(updateData)
+      .where(eq(billingAccounts.tenantId, tenantId));
+  }
+
+  async getTenantSubscription(tenantId: string): Promise<{
+    plan: SubscriptionPlan | null;
+    billingAccount: any;
+  }> {
+    const billingAccount = await this.getBillingAccount(tenantId);
+    let plan: SubscriptionPlan | null = null;
+    
+    if (billingAccount?.currentPlanId) {
+      plan = await this.getSubscriptionPlan(billingAccount.currentPlanId);
+    }
+    
+    return { plan, billingAccount };
   }
 }
 
