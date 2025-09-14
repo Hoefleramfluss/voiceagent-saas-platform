@@ -6,7 +6,10 @@ import { storage } from "./storage";
 import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema } from "@shared/schema";
 import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
-import { keyLoader, getStripeKey, invalidateKeyCache } from "./key-loader";
+import { keyLoader, getStripeKey, getStripeWebhookSecret, invalidateKeyCache } from "./key-loader";
+import { billingCalculator } from "./billing-calculator";
+import { stripeInvoiceService } from "./stripe-invoice-service";
+import { stripeWebhookService } from "./stripe-webhook-service";
 import { 
   apiKeyRateLimit, 
   criticalKeyOperationsRateLimit, 
@@ -17,6 +20,7 @@ import {
   logApiKeyAccess, 
   validateOperationPermissions 
 } from "./security-controls";
+import crypto from "crypto";
 
 // Stripe instance - will be initialized dynamically when needed
 let stripe: Stripe | null = null;
@@ -70,17 +74,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
 
-  // Health check
+  // Health check with Stripe validation
   app.get("/api/health", async (req, res) => {
     try {
-      // Simple health check
-      res.json({ 
-        status: "healthy", 
-        timestamp: new Date().toISOString(),
-        services: {
-          database: "operational",
-          redis: "operational"
+      const services: Record<string, string> = {
+        database: "operational",
+        redis: "operational"
+      };
+
+      // Validate Stripe configuration
+      try {
+        const stripeInstance = await getStripe();
+        if (stripeInstance) {
+          // Test Stripe connection with lightweight API call
+          await stripeInstance.products.list({ limit: 1 });
+          services.stripe = "operational";
+        } else {
+          services.stripe = "not_configured";
         }
+      } catch (stripeError) {
+        console.error('[Health Check] Stripe validation failed:', stripeError);
+        services.stripe = "error";
+      }
+
+      const overallStatus = Object.values(services).some(status => status === "error") ? "degraded" : "healthy";
+
+      res.json({ 
+        status: overallStatus, 
+        timestamp: new Date().toISOString(),
+        services
       });
     } catch (error) {
       res.status(503).json({ status: "unhealthy", error: (error as Error).message });
@@ -112,29 +134,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let stripeCustomerId: string | undefined;
       
-      // Create Stripe customer only if Stripe is available
-      if (stripe) {
+      // Create Stripe customer with idempotency - now properly checks if Stripe is available
+      const stripeInstance = await getStripe();
+      if (stripeInstance) {
         try {
-          const stripeCustomer = await stripe.customers.create({
+          // Generate idempotency key for customer creation
+          const customerIdempotencyKey = crypto.createHash('sha256')
+            .update(`customer:${validation.data.name}:${validation.data.email}`)
+            .digest('hex').substring(0, 32);
+
+          const stripeCustomer = await stripeInstance.customers.create({
             name: validation.data.name,
-            email: validation.data.email
+            email: validation.data.email,
+            description: `Customer for tenant: ${validation.data.name}`,
+            metadata: {
+              tenant_name: validation.data.name,
+              created_by: req.user?.id || 'unknown'
+            }
+          }, {
+            idempotencyKey: customerIdempotencyKey
           });
           stripeCustomerId = stripeCustomer.id;
+          console.log(`[Stripe] Created customer ${stripeCustomerId} for tenant ${validation.data.name}`);
         } catch (stripeError) {
-          console.warn('Failed to create Stripe customer:', stripeError);
-          // Continue without Stripe customer ID
+          console.error('[Stripe] Failed to create customer:', stripeError);
+          return res.status(500).json({ 
+            message: "Failed to create Stripe customer. Please check Stripe configuration.",
+            error: (stripeError as Error).message
+          });
         }
       } else {
-        console.warn('Stripe not available - creating tenant without Stripe customer');
+        return res.status(503).json({ 
+          message: "Stripe not configured. Please add Stripe API keys in admin settings." 
+        });
       }
 
+      // Create tenant with Stripe customer ID
       const tenant = await storage.createTenant({
         ...validation.data,
         stripeCustomerId
       });
 
+      // Create billing account record
+      if (stripeCustomerId) {
+        try {
+          await storage.createBillingAccount({
+            tenantId: tenant.id,
+            stripeCustomerId: stripeCustomerId
+          });
+        } catch (billingError) {
+          console.warn('[Billing] Failed to create billing account:', billingError);
+          // Continue - tenant is created, billing account can be created later
+        }
+      }
+
       res.status(201).json(tenant);
     } catch (error) {
+      console.error('[Tenant Creation] Error:', error);
       res.status(500).json({ message: (error as Error).message });
     }
   });
@@ -481,29 +537,218 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Stripe billing
+  // Billing and invoice endpoints
+  app.get("/api/billing/current-usage", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const usageAndCosts = await billingCalculator.getCurrentUsageAndCosts(user.tenantId);
+      res.json(usageAndCosts);
+    } catch (error) {
+      console.error('[Billing] Current usage error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/billing/invoices", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const invoices = await storage.getInvoices(user.tenantId);
+      res.json(invoices);
+    } catch (error) {
+      console.error('[Billing] Get invoices error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/billing/generate-invoice", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { tenantId, periodStart, periodEnd } = req.body;
+      
+      if (!tenantId) {
+        return res.status(400).json({ message: "Tenant ID required" });
+      }
+
+      const startDate = periodStart ? new Date(periodStart) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const endDate = periodEnd ? new Date(periodEnd) : new Date();
+
+      const result = await stripeInvoiceService.generateMonthlyInvoice(tenantId, startDate, endDate);
+      
+      if (result.success) {
+        res.json({ 
+          message: "Invoice generated successfully",
+          invoice: {
+            id: result.invoiceId,
+            stripeInvoiceId: result.stripeInvoiceId,
+            totalAmount: result.totalAmount
+          }
+        });
+      } else {
+        res.status(400).json({ message: result.error });
+      }
+    } catch (error) {
+      console.error('[Billing] Generate invoice error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   app.post("/api/billing/create-payment-intent", requireAuth, async (req, res) => {
     try {
-      const stripeInstance = await getStripe();
-      if (!stripeInstance) {
-        return res.status(503).json({ 
-          message: "Stripe not configured. Please add Stripe API keys in admin settings." 
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { invoiceId } = req.body;
+      
+      if (invoiceId) {
+        // Create payment intent for specific invoice
+        const result = await stripeInvoiceService.createPaymentIntentForInvoice(invoiceId);
+        if (result.success) {
+          res.json({ 
+            clientSecret: result.clientSecret,
+            paymentIntentId: result.paymentIntentId
+          });
+        } else {
+          res.status(400).json({ message: result.error });
+        }
+      } else {
+        // Create payment intent for current usage
+        const usageAndCosts = await billingCalculator.getCurrentUsageAndCosts(user.tenantId);
+        
+        if (usageAndCosts.totalCostCents <= 0) {
+          return res.status(400).json({ message: "No outstanding charges" });
+        }
+
+        const stripeInstance = await getStripe();
+        if (!stripeInstance) {
+          return res.status(503).json({ 
+            message: "Stripe not configured. Please add Stripe API keys in admin settings." 
+          });
+        }
+
+        const billingAccount = await storage.getBillingAccount(user.tenantId);
+        if (!billingAccount) {
+          return res.status(400).json({ message: "No billing account found" });
+        }
+        
+        const paymentIntent = await stripeInstance.paymentIntents.create({
+          amount: usageAndCosts.totalCostCents,
+          currency: "eur",
+          customer: billingAccount.stripeCustomerId,
+          metadata: {
+            tenant_id: user.tenantId,
+            usage_payment: 'true'
+          }
+        });
+        
+        res.json({ 
+          clientSecret: paymentIntent.client_secret,
+          paymentIntentId: paymentIntent.id,
+          amount: usageAndCosts.totalCostCents / 100
         });
       }
-      
-      const { amount } = req.body;
-      if (!amount || amount <= 0) {
-        return res.status(400).json({ message: "Valid payment amount required" });
-      }
-      
-      const paymentIntent = await stripeInstance.paymentIntents.create({
-        amount: Math.round(amount * 100),
-        currency: "eur",
-      });
-      res.json({ clientSecret: paymentIntent.client_secret });
     } catch (error: any) {
       console.error('[Stripe] Payment intent creation failed:', error);
       res.status(500).json({ message: "Error creating payment intent: " + error.message });
+    }
+  });
+
+  app.get("/api/billing/pricing", requireAuth, async (req, res) => {
+    try {
+      const pricing = billingCalculator.getPricing();
+      res.json(pricing);
+    } catch (error) {
+      console.error('[Billing] Get pricing error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Admin billing overview endpoint
+  app.get("/api/admin/billing/overview", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { timeRange = 'month' } = req.query;
+      
+      // Get all tenants
+      const tenants = await storage.getTenants();
+      let totalRevenue = 0;
+      let paidInvoices = 0;
+      let failedPayments = 0;
+      let pendingAmount = 0;
+      
+      const allInvoices = [];
+      
+      // Aggregate billing data from all tenants
+      for (const tenant of tenants) {
+        const invoices = await storage.getInvoices(tenant.id);
+        allInvoices.push(...invoices.map(inv => ({ ...inv, tenantName: tenant.name })));
+        
+        for (const invoice of invoices) {
+          const amount = invoice.totalAmountCents / 100; // Convert cents to decimal
+          if (invoice.status === 'paid') {
+            totalRevenue += amount;
+            paidInvoices++;
+          } else if (invoice.status === 'failed') {
+            failedPayments++;
+          } else if (invoice.status === 'pending') {
+            pendingAmount += amount;
+          }
+        }
+      }
+      
+      // Sort invoices by creation date
+      allInvoices.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      res.json({
+        totalRevenue,
+        pendingAmount,
+        paidInvoices,
+        failedPayments,
+        invoices: allInvoices.slice(0, 100), // Limit to 100 recent invoices
+        tenantCount: tenants.length
+      });
+    } catch (error) {
+      console.error('[Admin Billing] Overview error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Stripe webhook endpoint with raw body parsing
+  app.post("/api/stripe/webhook", async (req, res) => {
+    try {
+      const signature = req.headers['stripe-signature'];
+      if (!signature || typeof signature !== 'string') {
+        return res.status(400).json({ message: "Missing Stripe signature" });
+      }
+
+      // Get webhook secret securely from API key management
+      const endpointSecret = await getStripeWebhookSecret();
+      if (!endpointSecret) {
+        console.error('[Stripe Webhook] No webhook secret found in database or environment');
+        return res.status(500).json({ message: "Webhook secret not configured" });
+      }
+
+      const result = await stripeWebhookService.handleWebhook(
+        req.body as Buffer, // Raw body from express.raw() middleware
+        signature,
+        endpointSecret
+      );
+
+      if (result.success) {
+        res.json({ received: true, eventType: result.event?.type });
+      } else {
+        res.status(400).json({ message: result.error });
+      }
+    } catch (error) {
+      console.error('[Stripe Webhook] Endpoint error:', error);
+      res.status(500).json({ message: (error as Error).message });
     }
   });
 

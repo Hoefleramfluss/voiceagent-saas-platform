@@ -123,6 +123,14 @@ class SecureKeyLoader {
   }
 
   /**
+   * Get Stripe Webhook Endpoint Secret
+   */
+  async getStripeWebhookSecret(): Promise<string | null> {
+    return this.getApiKey('stripe', 'STRIPE_WEBHOOK_SECRET') || 
+           this.getApiKey('stripe', 'STRIPE_WEBHOOK_ENDPOINT_SECRET');
+  }
+
+  /**
    * Get Heroku API key
    */
   async getHerokuKey(): Promise<string | null> {
@@ -205,6 +213,10 @@ export async function getElevenLabsKey(): Promise<string | null> {
 
 export async function getGoogleCredentials(): Promise<string | null> {
   return keyLoader.getGoogleCredentials();
+}
+
+export async function getStripeWebhookSecret(): Promise<string | null> {
+  return keyLoader.getStripeWebhookSecret();
 }
 
 export async function getHerokuKey(): Promise<string | null> {

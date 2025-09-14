@@ -104,6 +104,61 @@ export interface ApiError {
 // Common API response patterns
 export type ApiResponse<T> = T | ApiError;
 
+// Utility type for mutation responses
+export interface MutationResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+// Additional Billing API Types
+export interface CurrentUsageResponse {
+  usage: Record<string, number>;
+  costs: Record<string, number>;
+  totalCost: number;
+}
+
+export interface PaymentIntentResponse {
+  clientSecret: string;
+  amount: number;
+  currency: string;
+}
+
+export interface PricingTier {
+  kind: string;
+  name: string;
+  ratePerUnit: number;
+}
+
+export interface InvoiceResponse {
+  id: string;
+  tenantId: string;
+  totalAmount: string;
+  status: 'paid' | 'pending' | 'failed' | 'cancelled';
+  createdAt: string;
+  periodStart: string;
+  periodEnd: string;
+  stripeInvoiceId?: string;
+  metadata?: any;
+}
+
+export interface GenerateInvoiceResponse {
+  success: boolean;
+  invoice?: {
+    id: string;
+    totalAmount: number;
+  };
+  error?: string;
+}
+
+export interface AdminBillingOverviewResponse {
+  totalRevenue: number;
+  pendingAmount: number;
+  paidInvoices: number;
+  failedPayments: number;
+  invoices: BillingInvoice[];
+}
+
 // Query key types for type-safe React Query usage
 export type QueryKeys = 
   | ["/api/health"]
@@ -113,4 +168,8 @@ export type QueryKeys =
   | ["/api/usage/summary", string] // with time period
   | ["/api/usage/events"] // usage events
   | ["/api/support/tickets"]
-  | ["/api/billing/overview", string, string]; // with timeRange and tenantId
+  | ["/api/billing/overview", string, string] // with timeRange and tenantId
+  | ["/api/billing/current-usage"]
+  | ["/api/billing/invoices"]
+  | ["/api/billing/pricing"]
+  | ["/api/admin/billing/overview", string, string]; // admin billing with params

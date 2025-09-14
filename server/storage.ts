@@ -6,7 +6,8 @@ import {
   invoices, 
   supportTickets, 
   provisioningJobs,
-  apiKeys, 
+  apiKeys,
+  billingAccounts,
   type Tenant,
   type User, 
   type InsertUser, 
@@ -20,7 +21,9 @@ import {
   type ProvisioningJob,
   type InsertProvisioningJob,
   type ApiKey,
-  type InsertApiKey
+  type InsertApiKey,
+  type Invoice,
+  type InsertInvoice
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -80,6 +83,17 @@ export interface IStorage {
   createApiKey(apiKey: InsertApiKey): Promise<ApiKey>;
   updateApiKey(id: string, updates: Partial<ApiKey>): Promise<ApiKey>;
   deleteApiKey(id: string): Promise<void>;
+
+  // Billing operations
+  createBillingAccount(billingAccount: { tenantId: string; stripeCustomerId: string }): Promise<void>;
+  getBillingAccount(tenantId: string): Promise<{ tenantId: string; stripeCustomerId: string; stripeSubscriptionId?: string } | undefined>;
+  updateBillingAccount(tenantId: string, updates: { stripeSubscriptionId?: string }): Promise<void>;
+
+  // Invoice operations
+  getInvoices(tenantId: string): Promise<any[]>;
+  getInvoice(id: string): Promise<any | undefined>;
+  createInvoice(invoice: any): Promise<any>;
+  updateInvoice(id: string, updates: any): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -330,6 +344,65 @@ export class DatabaseStorage implements IStorage {
 
   async deleteApiKey(id: string): Promise<void> {
     await db.delete(apiKeys).where(eq(apiKeys.id, id));
+  }
+
+  // Billing account operations
+  async createBillingAccount(billingAccount: { tenantId: string; stripeCustomerId: string }): Promise<void> {
+    await db.insert(billingAccounts)
+      .values({
+        tenantId: billingAccount.tenantId,
+        stripeCustomerId: billingAccount.stripeCustomerId
+      });
+  }
+
+  async getBillingAccount(tenantId: string): Promise<{ tenantId: string; stripeCustomerId: string; stripeSubscriptionId?: string } | undefined> {
+    const [account] = await db.select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.tenantId, tenantId));
+    
+    if (!account) return undefined;
+    
+    return {
+      tenantId: account.tenantId,
+      stripeCustomerId: account.stripeCustomerId,
+      stripeSubscriptionId: account.stripeSubscriptionId || undefined
+    };
+  }
+
+  async updateBillingAccount(tenantId: string, updates: { stripeSubscriptionId?: string }): Promise<void> {
+    await db.update(billingAccounts)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(billingAccounts.tenantId, tenantId));
+  }
+
+  // Invoice operations
+  async getInvoices(tenantId: string): Promise<Invoice[]> {
+    return await db.select()
+      .from(invoices)
+      .where(eq(invoices.tenantId, tenantId))
+      .orderBy(desc(invoices.createdAt));
+  }
+
+  async getInvoice(id: string): Promise<Invoice | undefined> {
+    const [invoice] = await db.select()
+      .from(invoices)
+      .where(eq(invoices.id, id));
+    return invoice || undefined;
+  }
+
+  async createInvoice(insertInvoice: InsertInvoice): Promise<Invoice> {
+    const [invoice] = await db.insert(invoices)
+      .values(insertInvoice)
+      .returning();
+    return invoice;
+  }
+
+  async updateInvoice(id: string, updates: Partial<Invoice>): Promise<Invoice> {
+    const [invoice] = await db.update(invoices)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(invoices.id, id))
+      .returning();
+    return invoice;
   }
 }
 

@@ -72,7 +72,7 @@ export const usageEvents = pgTable("usage_events", {
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
   botId: uuid("bot_id").notNull().references(() => bots.id),
   kind: usageEventKindEnum("kind").notNull(),
-  quantity: decimal("quantity", { precision: 10, scale: 2 }).notNull(),
+  quantity: integer("quantity").notNull(), // Store as integer for precise calculations
   metadata: jsonb("metadata"),
   timestamp: timestamp("timestamp").defaultNow().notNull()
 });
@@ -94,7 +94,7 @@ export const invoices = pgTable("invoices", {
   periodEnd: timestamp("period_end").notNull(),
   stripeInvoiceId: varchar("stripe_invoice_id", { length: 255 }),
   status: invoiceStatusEnum("status").notNull().default('pending'),
-  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
+  totalAmountCents: integer("total_amount_cents").notNull(), // Store as integer cents
   currency: varchar("currency", { length: 3 }).notNull().default('EUR'),
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -237,6 +237,12 @@ export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
   updatedAt: true
 });
 
+export const insertInvoiceSchema = createInsertSchema(invoices).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
@@ -252,3 +258,5 @@ export type ProvisioningJob = typeof provisioningJobs.$inferSelect;
 export type InsertProvisioningJob = z.infer<typeof insertProvisioningJobSchema>;
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
