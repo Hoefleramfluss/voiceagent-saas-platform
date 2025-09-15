@@ -49,7 +49,7 @@ async function initializeStripe(): Promise<Stripe | null> {
 
     if (stripeKey) {
       stripe = new Stripe(stripeKey, {
-        apiVersion: "2025-08-27.basil",
+        // Using latest stable API version by omitting apiVersion parameter
       });
       console.log('[Stripe] Successfully initialized with database-managed key');
       return stripe;

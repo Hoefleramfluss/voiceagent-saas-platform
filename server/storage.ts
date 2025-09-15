@@ -10,6 +10,7 @@ import {
   billingAccounts,
   auditLogs,
   subscriptionPlans,
+  invoiceJobs,
   type Tenant,
   type User, 
   type InsertUser, 
@@ -28,7 +29,9 @@ import {
   type InsertInvoice,
   type AuditLog,
   type InsertAuditLog,
-  type SubscriptionPlan
+  type SubscriptionPlan,
+  type InvoiceJob,
+  type InsertInvoiceJob
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -110,6 +113,20 @@ export interface IStorage {
   getInvoice(id: string): Promise<any | undefined>;
   createInvoice(invoice: any): Promise<any>;
   updateInvoice(id: string, updates: any): Promise<any>;
+
+  // Invoice job operations
+  createInvoiceJob(job: InsertInvoiceJob): Promise<InvoiceJob>;
+  getInvoiceJob(id: string): Promise<InvoiceJob | undefined>;
+  getInvoiceJobByJobId(jobId: string): Promise<InvoiceJob | undefined>;
+  updateInvoiceJob(id: string, updates: Partial<InvoiceJob>): Promise<InvoiceJob>;
+  getInvoiceJobs(options?: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    periodStart?: Date;
+    periodEnd?: Date;
+  }): Promise<InvoiceJob[]>;
+  getLastSuccessfulInvoiceJob(): Promise<InvoiceJob | undefined>;
 
   // Audit log operations
   createAuditLog(auditLog: InsertAuditLog): Promise<AuditLog>;
@@ -474,6 +491,71 @@ export class DatabaseStorage implements IStorage {
       .where(eq(invoices.id, id))
       .returning();
     return invoice;
+  }
+
+  // Invoice job operations
+  async createInvoiceJob(insertJob: InsertInvoiceJob): Promise<InvoiceJob> {
+    const [job] = await db.insert(invoiceJobs)
+      .values(insertJob)
+      .returning();
+    return job;
+  }
+
+  async getInvoiceJob(id: string): Promise<InvoiceJob | undefined> {
+    const [job] = await db.select()
+      .from(invoiceJobs)
+      .where(eq(invoiceJobs.id, id));
+    return job || undefined;
+  }
+
+  async getInvoiceJobByJobId(jobId: string): Promise<InvoiceJob | undefined> {
+    const [job] = await db.select()
+      .from(invoiceJobs)
+      .where(eq(invoiceJobs.jobId, jobId));
+    return job || undefined;
+  }
+
+  async updateInvoiceJob(id: string, updates: Partial<InvoiceJob>): Promise<InvoiceJob> {
+    const [job] = await db.update(invoiceJobs)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(invoiceJobs.id, id))
+      .returning();
+    return job;
+  }
+
+  async getInvoiceJobs(options: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    periodStart?: Date;
+    periodEnd?: Date;
+  } = {}): Promise<InvoiceJob[]> {
+    const { limit = 100, offset = 0, status, periodStart, periodEnd } = options;
+    
+    const conditions = [];
+    if (status) conditions.push(eq(invoiceJobs.status, status as any));
+    if (periodStart) conditions.push(gte(invoiceJobs.periodStart, periodStart));
+    if (periodEnd) conditions.push(lte(invoiceJobs.periodEnd, periodEnd));
+    
+    let query = db.select().from(invoiceJobs);
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+    
+    return await query
+      .orderBy(desc(invoiceJobs.startTime))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async getLastSuccessfulInvoiceJob(): Promise<InvoiceJob | undefined> {
+    const [job] = await db.select()
+      .from(invoiceJobs)
+      .where(eq(invoiceJobs.status, 'completed'))
+      .orderBy(desc(invoiceJobs.endTime))
+      .limit(1);
+    return job || undefined;
   }
 
   // Audit log operations

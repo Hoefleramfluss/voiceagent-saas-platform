@@ -44,7 +44,7 @@ export class StripeInvoiceService {
       const stripeKey = await getStripeKey();
       if (stripeKey) {
         this.stripe = new Stripe(stripeKey, {
-          apiVersion: "2025-08-27.basil",
+          // Using latest stable API version by omitting apiVersion parameter
         });
         return this.stripe;
       }

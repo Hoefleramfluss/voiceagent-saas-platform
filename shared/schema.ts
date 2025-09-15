@@ -26,6 +26,7 @@ export const apiKeyServiceTypeEnum = pgEnum('api_key_service_type', ['stripe', '
 export const auditEventTypeEnum = pgEnum('audit_event_type', ['api_key_created', 'api_key_deleted', 'user_login', 'user_logout', 'password_change', 'role_change', 'sensitive_operation']);
 export const subscriptionPlanStatusEnum = pgEnum('subscription_plan_status', ['active', 'inactive', 'deprecated']);
 export const subscriptionStatusEnum = pgEnum('subscription_status', ['active', 'paused', 'canceled', 'expired']);
+export const invoiceJobStatusEnum = pgEnum('invoice_job_status', ['pending', 'running', 'completed', 'failed']);
 
 // Tenants table
 export const tenants = pgTable("tenants", {
@@ -186,6 +187,25 @@ export const auditLogs = pgTable("audit_logs", {
   timestamp: timestamp("timestamp").defaultNow().notNull()
 });
 
+// Automated invoice jobs table (for persistent tracking and recovery)
+export const invoiceJobs = pgTable("invoice_jobs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  jobId: varchar("job_id", { length: 100 }).notNull().unique(),
+  status: invoiceJobStatusEnum("status").notNull().default('pending'),
+  periodStart: timestamp("period_start").notNull(),
+  periodEnd: timestamp("period_end").notNull(),
+  startTime: timestamp("start_time").notNull(),
+  endTime: timestamp("end_time"),
+  processedTenants: integer("processed_tenants").notNull().default(0),
+  totalTenants: integer("total_tenants").notNull().default(0),
+  successfulInvoices: jsonb("successful_invoices").default([]),
+  failedInvoices: jsonb("failed_invoices").default([]),
+  errors: jsonb("errors").default([]),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   users: many(users),
@@ -317,6 +337,12 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
   timestamp: true
 });
 
+export const insertInvoiceJobSchema = createInsertSchema(invoiceJobs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
@@ -337,3 +363,5 @@ export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type InvoiceJob = typeof invoiceJobs.$inferSelect;
+export type InsertInvoiceJob = z.infer<typeof insertInvoiceJobSchema>;
