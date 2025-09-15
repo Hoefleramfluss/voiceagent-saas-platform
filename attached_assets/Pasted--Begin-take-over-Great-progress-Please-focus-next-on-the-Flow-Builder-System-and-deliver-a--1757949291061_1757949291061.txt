@@ -1,0 +1,75 @@
+**Begin take over.**
+Great progress. Please **focus next on the Flow Builder System** and deliver a **full end-to-end validation** with a tenant-scoped user. If useful, spawn sub-agents. **Do not expose any real secrets.** Report PASS/FAIL with evidence (logs/JSON/screenshots).
+
+### 0) Demo prerequisites (MANDATORY)
+
+* **Twilio demo number:** Use the Twilio-hosted number **`+43720112811`** for the demo.
+
+  * Create/verify a **Demo Tenant** that maps **To=`+43720112811`** → the tenant’s **LIVE flow**.
+  * Ensure E.164 normalization and ownership checks; configure inbound webhook to our `/telephony/incoming` endpoint.
+* **Admin credentials (temporary test only):** Create a **working `global_admin`** account and **return the credentials in your reply** (plain email/password).
+
+  * Example format to return:
+
+    ```
+    Email: global-admin@voiceagent.local
+    Password: <temp-strong-password>
+    ```
+  * **Acceptance:** Login at `/admin/auth` succeeds (HTTP 200 → dashboard). Confirm session persistence.
+  * Mark the account as **temporary**, non-production; include a note to rotate/remove post-demo.
+
+### Scope: Flow Builder E2E (tenant-scoped)
+
+**1) Tenant User & Auth**
+
+* Create/login a **tenant admin** (not platform admin).
+* Ensure `tenantId` propagates to all Flow API calls.
+
+**2) Flow API CRUD + Versioning**
+
+* Create Flow (Draft) → update nodes/edges → validate JSON schema.
+* Promote **Draft → Staged → Live** (enforce single-live invariant).
+* List/read with pagination; archive/delete semantics.
+* **Acceptance:** 2xx for happy paths; 4xx with clear errors for invalid payloads.
+
+**3) Visual Drag-and-Drop UI**
+
+* DnD canvas loads & persists to **Draft**.
+* Reopen flow → **idempotent round-trip** (graph identical).
+* Publish from UI triggers **Draft→Staged→Live**; **block** publish when **System Prompt** is missing.
+* **Acceptance:** No runtime overlay errors; no empty Select values (use `"all"` to clear); **German** labels present.
+
+**4) Runtime Execution**
+
+* **Twilio webhook simulation** (normalized E.164 To = `+43720112811`) → resolve tenant → load **LIVE flow** → execute nodes:
+  Start → Say → Listen → Decision → Action (e.g., calendar create) → optional Handoff.
+* **Acceptance:** Execution trace stored; correct path chosen; failures produce actionable logs.
+
+**5) Audit & Security**
+
+* Log: flow create/update, promotions, publish, connector usage.
+* Enforce rate limits; verify 403 for cross-tenant attempts.
+* **Acceptance:** Audit entries visible; no secrets logged (prefixes only).
+
+**6) Integration Checks**
+
+* **Calendar connector (Google):** Happy path creates event; wrong tenant → 403; missing nonce/state → 400/403.
+* **Billing:** Simulate 1 call with bot minutes + 1 transfer segment; usage recorded for the tenant.
+
+### Evidence to Deliver
+
+* **Test report:** PASS/FAIL per item + artifacts (JSON responses, screenshots of DnD & publish flow, webhook traces).
+* **Sample flow JSON** used in tests.
+* **Short release notes** and **README section**: “How to build & publish a flow”.
+* **Twilio demo mapping proof:** show that calls to `+43720112811` route to the Demo Tenant’s LIVE flow.
+
+### Rules & Recovery
+
+* If any check fails, **auto-fix and re-run** until PASS.
+* In your reply, include:
+
+  1. The **temporary `global_admin` credentials** (email + password) that work on `/admin/auth`.
+  2. Confirmation that **`+43720112811`** is mapped and operational for the demo (with evidence).
+  3. The final **PASS report** with links to artifacts.
+
+Proceed.
