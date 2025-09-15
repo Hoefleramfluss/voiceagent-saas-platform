@@ -1,6 +1,8 @@
 import { storage } from "./storage";
 import { stripeInvoiceService } from "./stripe-invoice-service";
 import { InvoiceJob } from "@shared/schema";
+import { withBillingResilience, withDatabaseRetry } from "./retry-utils";
+import { AppError, ErrorType, ErrorSeverity, createError } from "./error-handling";
 
 export interface AutomatedInvoiceJob {
   id: string;
@@ -190,23 +192,25 @@ export class AutomatedInvoiceService {
     let dbJob: InvoiceJob | null = null;
     
     try {
-      // Create persistent job record in database
-      dbJob = await storage.createInvoiceJob({
-        jobId,
-        status: 'pending',
-        periodStart,
-        periodEnd,
-        startTime: new Date(),
-        processedTenants: 0,
-        totalTenants: 0,
-        successfulInvoices: [],
-        failedInvoices: [],
-        errors: [],
-        metadata: {
-          startedBy: 'automated_scheduler',
-          version: '2.0'
-        }
-      });
+      // Create persistent job record in database with retry logic
+      dbJob = await withDatabaseRetry(async () => {
+        return storage.createInvoiceJob({
+          jobId,
+          status: 'pending',
+          periodStart,
+          periodEnd,
+          startTime: new Date(),
+          processedTenants: 0,
+          totalTenants: 0,
+          successfulInvoices: [],
+          failedInvoices: [],
+          errors: [],
+          metadata: {
+            startedBy: 'automated_scheduler',
+            version: '2.0'
+          }
+        });
+      }, 'createInvoiceJob');
 
       // Update to running status
       if (!dbJob) {
@@ -249,11 +253,14 @@ export class AutomatedInvoiceService {
         try {
           console.log(`[AutoInvoice] Processing tenant: ${tenant.id} (${tenant.name})`);
           
-          const result = await stripeInvoiceService.generateMonthlyInvoice(
-            tenant.id,
-            periodStart,
-            periodEnd
-          );
+          // Generate invoice with billing resilience (circuit breaker + retry)
+          const result = await withBillingResilience(async () => {
+            return stripeInvoiceService.generateMonthlyInvoice(
+              tenant.id,
+              periodStart,
+              periodEnd
+            );
+          }, 'generateMonthlyInvoice');
 
           if (result.success) {
             if (result.invoiceId) {
