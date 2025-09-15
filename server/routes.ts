@@ -2870,6 +2870,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
     disconnectConnector
   } = await import('./connector-oauth-service');
 
+  // Feature flag middleware and utilities
+  const { 
+    injectFeatureFlags, 
+    createContextFromRequest, 
+    getAvailableConnectors 
+  } = await import('./feature-flag-service');
+
+  // Apply feature flag middleware globally to API routes
+  app.use('/api', injectFeatureFlags());
+
+  // 🏁 FEATURE FLAGS API - Admin feature flag management
+  app.get("/api/admin/feature-flags", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { featureFlagService } = await import('./feature-flag-service');
+      const context = createContextFromRequest(req);
+      const allFlags = await featureFlagService.getEnabledFlags(context);
+      
+      res.json({
+        flags: allFlags,
+        context: {
+          environment: context.environment,
+          userRole: context.userRole
+        }
+      });
+    } catch (error) {
+      console.error('[Feature Flags] Get flags error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // 🏁 FEATURE FLAGS API - Customer-accessible feature flags (all users)
+  app.get("/api/feature-flags", requireAuth, async (req, res) => {
+    try {
+      const { featureFlagService } = await import('./feature-flag-service');
+      const context = createContextFromRequest(req);
+      const enabledFlags = await featureFlagService.getEnabledFlags(context);
+      
+      res.json({
+        flags: enabledFlags,
+        context: {
+          environment: context.environment,
+          tenantId: context.tenantId,
+          userRole: context.userRole
+        }
+      });
+    } catch (error) {
+      console.error('[Feature Flags] Get customer flags error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Get available connectors based on feature flags
+  app.get("/api/connectors/available", requireAuth, requireRole(['customer_admin', 'customer_user']), async (req, res) => {
+    try {
+      const context = createContextFromRequest(req);
+      const availableConnectors = await getAvailableConnectors(context);
+      
+      res.json(availableConnectors);
+    } catch (error) {
+      console.error('[Connectors] Get available connectors error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // 🔗 CONNECTOR FEATURE FLAG ENFORCEMENT MIDDLEWARE
+  const checkConnectorFeatureFlag = async (req: any, res: any, next: any) => {
+    try {
+      const provider = req.params.provider || req.body.provider;
+      
+      if (!provider) {
+        return next(); // No provider specified, continue
+      }
+
+      const { featureFlagService } = await import('./feature-flag-service');
+      const context = createContextFromRequest(req);
+      const flagKey = `connectors.${provider}` as FeatureFlagKey;
+      const isEnabled = await featureFlagService.isEnabled(flagKey, context);
+      
+      if (!isEnabled) {
+        return res.status(403).json({ 
+          message: `Provider '${provider}' is not available`,
+          reason: "Feature disabled"
+        });
+      }
+      
+      next();
+    } catch (error) {
+      console.error('[Connector Feature Flag Check] Error:', error);
+      res.status(500).json({ message: "Feature flag check failed" });
+    }
+  };
+
   // 🔗 CONNECTOR ENDPOINTS - Fixed routing order: literal routes BEFORE parameterized routes
   
   // Provider-type validation mapping
@@ -2894,27 +2986,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/connectors/oauth/authorize/:provider", 
     oauthAuthorizationRateLimit,
     requireAuth, 
-    requireRole(['customer_admin']), 
+    requireRole(['customer_admin']),
+    checkConnectorFeatureFlag,
     initiateOAuth
   );
 
   // Handle OAuth callback (Public endpoint) - with rate limiting for security
   app.get("/api/connectors/oauth/callback/:provider", 
-    oauthCallbackRateLimit, 
+    oauthCallbackRateLimit,
+    checkConnectorFeatureFlag,
     handleOAuthCallback
   );
 
   // Test connector connection (Customer Admin/User)
   app.post("/api/connectors/test/:provider", 
     requireAuth, 
-    requireRole(['customer_admin', 'customer_user']), 
+    requireRole(['customer_admin', 'customer_user']),
+    checkConnectorFeatureFlag,
     testConnectorConnection
   );
 
   // Disconnect connector (Customer Admin only) - provider-specific OAuth cleanup
   app.delete("/api/connectors/:provider", 
     requireAuth, 
-    requireRole(['customer_admin']), 
+    requireRole(['customer_admin']),
+    checkConnectorFeatureFlag,
     disconnectConnector
   );
 
@@ -2991,6 +3087,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (providerTypeMap[provider] !== type) {
         return res.status(400).json({ 
           message: `Provider '${provider}' does not match type '${type}'. Expected type: '${providerTypeMap[provider]}'` 
+        });
+      }
+
+      // Feature flag enforcement for connector creation
+      const context = createContextFromRequest(req);
+      const flagKey = `connectors.${provider}` as FeatureFlagKey;
+      const isEnabled = await featureFlagService.isEnabled(flagKey, context);
+      
+      if (!isEnabled) {
+        return res.status(403).json({ 
+          message: `Provider '${provider}' is not available`,
+          reason: "Feature disabled"
         });
       }
 
