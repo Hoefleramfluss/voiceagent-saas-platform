@@ -43,10 +43,13 @@ export function normalizePhoneNumber(phoneNumber: string, defaultCountry?: strin
     // Strategy 1: If number starts with +, try parsing as international number
     if (sanitized.startsWith('+')) {
       try {
-        parsedNumber = parsePhoneNumber(sanitized);
-        // Verify it's a supported region
-        if (parsedNumber?.country && SUPPORTED_REGIONS.includes(parsedNumber.country)) {
-          return parsedNumber.format('E.164');
+        // Parse without country hint for international numbers
+        if (isValidPhoneNumber(sanitized)) {
+          parsedNumber = parsePhoneNumber(sanitized);
+          // Verify it's a supported region
+          if (parsedNumber?.country && SUPPORTED_REGIONS.includes(parsedNumber.country)) {
+            return parsedNumber.format('E.164');
+          }
         }
       } catch {
         // Continue to other strategies
@@ -84,9 +87,11 @@ export function normalizePhoneNumber(phoneNumber: string, defaultCountry?: strin
     // Strategy 3: Try US first (for US numbers without country code)
     if (!defaultCountry || defaultCountry !== 'US') {
       try {
-        parsedNumber = parsePhoneNumber(sanitized, 'US');
-        if (parsedNumber?.country === 'US') {
-          return parsedNumber.format('E.164');
+        if (isValidPhoneNumber(sanitized, 'US')) {
+          parsedNumber = parsePhoneNumber(sanitized, 'US');
+          if (parsedNumber?.country === 'US') {
+            return parsedNumber.format('E.164');
+          }
         }
       } catch {
         // Continue to next strategy
@@ -96,9 +101,11 @@ export function normalizePhoneNumber(phoneNumber: string, defaultCountry?: strin
     // Strategy 4: Try Austria specifically for numbers starting with 0
     if (!sanitized.startsWith('+') && sanitized.replace(/\D/g, '').startsWith('0')) {
       try {
-        parsedNumber = parsePhoneNumber(sanitized, 'AT');
-        if (parsedNumber?.country === 'AT') {
-          return parsedNumber.format('E.164');
+        if (isValidPhoneNumber(sanitized, 'AT')) {
+          parsedNumber = parsePhoneNumber(sanitized, 'AT');
+          if (parsedNumber?.country === 'AT') {
+            return parsedNumber.format('E.164');
+          }
         }
       } catch {
         // Continue to next strategy
