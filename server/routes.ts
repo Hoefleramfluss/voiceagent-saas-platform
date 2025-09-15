@@ -1776,6 +1776,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // API 404 fallback handler - return JSON instead of HTML for unknown API routes
+  app.use('/api/*', (req, res) => {
+    res.status(404).json({ 
+      message: "API endpoint not found",
+      error: "ENDPOINT_NOT_FOUND",
+      path: req.path,
+      method: req.method
+    });
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
