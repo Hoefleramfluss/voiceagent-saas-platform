@@ -1626,13 +1626,28 @@ export class DatabaseStorage implements IStorage {
   async cleanupTenantData(tenantId: string): Promise<void> {
     return await withDatabaseRetry(async () => {
       // Delete related data in proper order to avoid foreign key constraints
+      // Start with leaf records (no dependencies)
       await db.delete(usageEvents).where(eq(usageEvents.tenantId, tenantId));
       await db.delete(supportTickets).where(eq(supportTickets.tenantId, tenantId));
-      await db.delete(bots).where(eq(bots.tenantId, tenantId));
-      await db.delete(flows).where(eq(flows.tenantId, tenantId));
-      await db.delete(connectors).where(eq(connectors.tenantId, tenantId));
-      await db.delete(demoVerificationCodes).where(eq(demoVerificationCodes.tenantId, tenantId));
       await db.delete(auditLogs).where(eq(auditLogs.tenantId, tenantId));
+      await db.delete(demoVerificationCodes).where(eq(demoVerificationCodes.tenantId, tenantId));
+      
+      // Delete phone mappings before bots (they reference bots)
+      await db.delete(phoneNumberMappings).where(eq(phoneNumberMappings.tenantId, tenantId));
+      
+      // Delete flow versions before flows
+      const tenantFlows = await db.select({ id: flows.id }).from(flows).where(eq(flows.tenantId, tenantId));
+      for (const flow of tenantFlows) {
+        await db.delete(flowVersions).where(eq(flowVersions.flowId, flow.id));
+      }
+      await db.delete(flows).where(eq(flows.tenantId, tenantId));
+      
+      // Delete connectors
+      await db.delete(connectors).where(eq(connectors.tenantId, tenantId));
+      
+      // Delete bots after phone mappings are cleaned up
+      await db.delete(bots).where(eq(bots.tenantId, tenantId));
+      
       // Clean up users last
       await db.delete(users).where(eq(users.tenantId, tenantId));
     }, 'cleanupTenantData');
@@ -1640,13 +1655,23 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTenant(tenantId: string): Promise<void> {
     return await withDatabaseRetry(async () => {
+      // First verify tenant exists
+      const existingTenant = await this.getTenant(tenantId);
+      if (!existingTenant) {
+        throw createError.notFound('Tenant not found');
+      }
+      
+      // Clean up all dependent records first to avoid foreign key violations
+      await this.cleanupTenantData(tenantId);
+      
+      // Now safe to delete the tenant
       const result = await db
         .delete(tenants)
         .where(eq(tenants.id, tenantId))
         .returning();
       
       if (result.length === 0) {
-        throw createError.notFound('Tenant not found');
+        throw createError.notFound('Failed to delete tenant');
       }
     }, 'deleteTenant');
   }

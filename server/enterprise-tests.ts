@@ -114,14 +114,15 @@ export const testRunner = new EnterpriseTestRunner();
  * Verify that tenants cannot access each other's data
  */
 export async function testTenantIsolation(): Promise<TestSuite> {
-  // Create test tenants for isolation testing
+  // Use unique identifiers to prevent conflicts
+  const testId = Date.now().toString();
   const tenant1 = await storage.createTenant({
-    name: 'Test Tenant 1',
+    name: `Test Tenant 1 ${testId}`,
     status: 'active'
   });
   
   const tenant2 = await storage.createTenant({
-    name: 'Test Tenant 2', 
+    name: `Test Tenant 2 ${testId}`, 
     status: 'active'
   });
 
@@ -245,7 +246,7 @@ export async function testTenantIsolation(): Promise<TestSuite> {
       test: async () => {
         // Generate unique phone number for this test run
         const timestamp = Date.now();
-        const phoneNumber = `+43677123456${timestamp.toString().slice(-2)}`;
+        const phoneNumber = `+43677${timestamp.toString().slice(-6)}`;  // Use more digits to ensure uniqueness
         
         // Create test bot for tenant 1
         const testBot1 = await storage.createBot({
@@ -292,6 +293,12 @@ export async function testTenantIsolation(): Promise<TestSuite> {
             await storage.removePhoneMapping(phoneNumber);
           } catch (cleanupError) {
             console.warn(`[TEST CLEANUP] Failed to cleanup phone mapping for ${phoneNumber}:`, cleanupError);
+            // Try alternative cleanup methods
+            try {
+              await storage.removePhoneMappingsByTenantId(tenant1.id);
+            } catch (altCleanupError) {
+              console.warn(`[TEST CLEANUP] Alternative cleanup also failed:`, altCleanupError);
+            }
           }
         }
       }
@@ -300,13 +307,29 @@ export async function testTenantIsolation(): Promise<TestSuite> {
 
   const suite = await testRunner.runTestSuite('Tenant Isolation Tests', tests);
   
-  // Cleanup test data
-  try {
-    await storage.deleteTenant(tenant1.id);
-    await storage.deleteTenant(tenant2.id);
-  } catch (error) {
-    console.warn('[TEST CLEANUP] Failed to cleanup test tenants:', error);
-  }
+  // Comprehensive cleanup with proper error handling
+  const cleanupTenants = async () => {
+    // Clean up each tenant individually to avoid one failure blocking the other
+    for (const tenant of [tenant1, tenant2]) {
+      try {
+        await storage.deleteTenant(tenant.id);
+        console.log(`[TEST CLEANUP] Successfully cleaned up tenant ${tenant.id}`);
+      } catch (error) {
+        console.warn(`[TEST CLEANUP] Failed to cleanup tenant ${tenant.id}:`, error);
+        // Try manual cleanup of dependent records
+        try {
+          await storage.cleanupTenantData(tenant.id);
+          // Try deleting tenant again after cleanup
+          await storage.deleteTenant(tenant.id);
+          console.log(`[TEST CLEANUP] Successfully cleaned up tenant ${tenant.id} on retry`);
+        } catch (retryError) {
+          console.error(`[TEST CLEANUP] Complete cleanup failure for tenant ${tenant.id}:`, retryError);
+        }
+      }
+    }
+  };
+  
+  await cleanupTenants();
   
   return suite;
 }
@@ -320,19 +343,19 @@ export async function testPhoneMappingSecurity(): Promise<TestSuite> {
     {
       name: 'E.164 Phone Normalization',
       test: async () => {
-        // Test various phone number formats (including both real and test numbers)
+        // Test various phone number formats with appropriate country codes
         const testCases = [
-          { input: '+43 677 12345678', expected: '+4367712345678' },
-          { input: '0043 677 12345678', expected: '+4367712345678' },
-          { input: '0677 12345678', expected: '+4367712345678' },
-          { input: '+1 212 555 1234', expected: '+12125551234' }, // Valid NYC phone number
-          { input: '+1 415 555 2001', expected: '+14155552001' }, // Valid SF test number
-          { input: '(415) 555-2001', expected: '+14155552001' }   // Formatted valid test number
+          { input: '+43 677 12345678', expected: '+4367712345678', country: 'AT' },
+          { input: '0043 677 12345678', expected: '+4367712345678', country: 'AT' },
+          { input: '0677 12345678', expected: '+4367712345678', country: 'AT' },
+          { input: '+1 212 555 1234', expected: '+12125551234', country: 'US' }, // Valid NYC phone number
+          { input: '+1 415 555 2001', expected: '+14155552001', country: 'US' }, // Valid SF test number
+          { input: '(415) 555-2001', expected: '+14155552001', country: 'US' }   // Formatted valid test number
         ];
 
         for (const testCase of testCases) {
           const { normalizePhoneToE164 } = await import('./phone-security-utils');
-          const normalized = normalizePhoneToE164(testCase.input, 'AT');
+          const normalized = normalizePhoneToE164(testCase.input, testCase.country);
           
           if (normalized !== testCase.expected) {
             throw new Error(`Phone normalization failed: ${testCase.input} -> ${normalized}, expected ${testCase.expected}`);
@@ -621,12 +644,22 @@ export async function testConnectorAccessSecurity(): Promise<TestSuite> {
             throw new Error('Tenant 2 should only see their connector configs');
           }
         } finally {
-          // Cleanup
-          try {
-            await storage.deleteTenant(tenant1.id);
-            await storage.deleteTenant(tenant2.id);
-          } catch (cleanupError) {
-            console.warn('[TEST CLEANUP] Failed to cleanup connector test tenants:', cleanupError);
+          // Comprehensive cleanup for both tenants
+          for (const tenant of [tenant1, tenant2]) {
+            try {
+              await storage.deleteTenant(tenant.id);
+              console.log(`[TEST CLEANUP] Successfully cleaned up tenant ${tenant.id}`);
+            } catch (cleanupError) {
+              console.warn(`[TEST CLEANUP] Failed to cleanup tenant ${tenant.id}:`, cleanupError);
+              // Try manual cleanup
+              try {
+                await storage.cleanupTenantData(tenant.id);
+                await storage.deleteTenant(tenant.id);
+                console.log(`[TEST CLEANUP] Successfully cleaned up tenant ${tenant.id} on retry`);
+              } catch (retryError) {
+                console.error(`[TEST CLEANUP] Complete cleanup failure for tenant ${tenant.id}:`, retryError);
+              }
+            }
           }
         }
       }
@@ -645,9 +678,10 @@ export async function testConnectorAccessSecurity(): Promise<TestSuite> {
           throw new Error('CalendarAdapter interface not available');
         }
         
-        // Create test tenant
+        // Create test tenant with unique name
+        const testId = Date.now().toString();
         const testTenant = await storage.createTenant({
-          name: 'API Security Test Tenant',
+          name: `API Security Test Tenant ${testId}`,
           status: 'active'
         });
         
@@ -702,11 +736,20 @@ export async function testConnectorAccessSecurity(): Promise<TestSuite> {
             }
           }
         } finally {
-          // Cleanup
+          // Comprehensive cleanup for test tenant
           try {
             await storage.deleteTenant(testTenant.id);
+            console.log(`[TEST CLEANUP] Successfully cleaned up tenant ${testTenant.id}`);
           } catch (cleanupError) {
-            console.warn('[TEST CLEANUP] Failed to cleanup API test tenant:', cleanupError);
+            console.warn(`[TEST CLEANUP] Failed to cleanup tenant ${testTenant.id}:`, cleanupError);
+            // Try manual cleanup
+            try {
+              await storage.cleanupTenantData(testTenant.id);
+              await storage.deleteTenant(testTenant.id);
+              console.log(`[TEST CLEANUP] Successfully cleaned up tenant ${testTenant.id} on retry`);
+            } catch (retryError) {
+              console.error(`[TEST CLEANUP] Complete cleanup failure for tenant ${testTenant.id}:`, retryError);
+            }
           }
         }
       }
