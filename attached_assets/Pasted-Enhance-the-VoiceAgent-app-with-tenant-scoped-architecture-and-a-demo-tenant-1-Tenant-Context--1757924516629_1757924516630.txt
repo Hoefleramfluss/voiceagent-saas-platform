@@ -1,0 +1,42 @@
+Enhance the VoiceAgent app with tenant-scoped architecture and a demo tenant:
+
+1) Tenant Context:
+   - Add a request-scoped tenant loader (from subdomain/header/JWT).
+   - Load tenant settings: Twilio (accountSid, authToken, inbound numbers), STT/TTS config, OpenAI model + REQUIRED system prompt, flow_id + live version, CRM/Calendar connector creds, billing package.
+   - Cache per tenant with TTL; enforce isolation.
+
+2) Bot Editor:
+   - Add a REQUIRED “System Prompt” field per bot (validate on save/publish).
+   - Support template variables ({brand}, {opening_hours}, {language=de-AT}).
+   - Do not allow publish if system prompt is empty.
+
+3) Flow Runtime:
+   - Ensure live flow is loaded per tenant.
+   - Keep Redis session state; support barge-in and retry/fallback to human transfer.
+
+4) Twilio Mapping:
+   - Map inbound phone numbers to tenantId.
+   - Set webhooks automatically for the demo tenant’s Twilio number.
+
+5) Connectors:
+   - Implement connector interfaces for CRM/Calendar (findSlots/createEvent).
+   - Provide adapters for Google Calendar and Microsoft Graph; add stubs for common CRMs (HubSpot/Salesforce/Pipedrive) with TODOs for Austrian clinic/dealership systems (to be added when API docs are provided).
+
+6) Demo Tenant:
+   - Add a setup wizard: enter Twilio number → verify via Twilio API → auto-configure webhook; choose STT/TTS (Google), set mandatory system prompt, publish a sample flow.
+   - Enable drag-and-drop editor; draft/staged/live workflow.
+
+7) Usage & Billing:
+   - Track voicebot minutes (media stream) and forwarding minutes (dial segments) per tenant.
+   - Monthly aggregation: subtract package free minutes, bill extra minutes + base fee.
+   - Keep Stripe backend-only (sk_…); frontend uses pk_… only.
+
+8) Security & Ops:
+   - Encrypt connector secrets; add RBAC per tenant.
+   - Add health checks for Twilio, STT/TTS, OpenAI, CRM/Calendar.
+   - Add audit logs for publishes, prompt changes, connector writes.
+
+Deliverables:
+   - DB migrations for tenants, bots, flows, versions, connectors, secrets, numbers, usage_minutes, billing_packages.
+   - API endpoints: tenants/{id}/settings, bots CRUD, flows publish, usage reports.
+   - Demo tenant wizard UI and happy-path e2e test (inbound call → flow turns → optional calendar write).
