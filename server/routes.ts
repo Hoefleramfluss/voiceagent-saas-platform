@@ -23,7 +23,10 @@ import {
   auditSensitiveOperation, 
   requireAllowedIP, 
   logApiKeyAccess, 
-  validateOperationPermissions 
+  validateOperationPermissions,
+  demoTenantRateLimit,
+  phoneVerificationRateLimit,
+  resendCodeRateLimit
 } from "./security-controls";
 import crypto from "crypto";
 
@@ -78,6 +81,99 @@ async function getStripe(): Promise<Stripe | null> {
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
+
+  // Demo tenant setup endpoints (no auth required for demo)
+  app.post("/api/demo/create-tenant", demoTenantRateLimit, async (req, res) => {
+    try {
+      const { demoTenantService } = await import("./demo-tenant-service");
+      
+      const validation = z.object({
+        companyName: z.string().min(1, "Company name is required"),
+        contactEmail: z.string().email("Valid email address required"),
+        contactPhone: z.string().min(10, "Valid phone number required").max(20, "Phone number too long"),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        industry: z.string().min(1, "Industry is required"),
+        useCase: z.string().min(1, "Use case is required")
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten() 
+        });
+      }
+      
+      const result = await demoTenantService.createDemoTenant(validation.data);
+      res.json(result);
+      
+    } catch (error) {
+      console.error('[Demo API] Create tenant error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+  
+  app.post("/api/demo/verify-phone", phoneVerificationRateLimit, async (req, res) => {
+    try {
+      const { demoTenantService } = await import("./demo-tenant-service");
+      
+      const validation = z.object({
+        tenantId: z.string().min(1, "Tenant ID is required"),
+        code: z.string().length(6, "Verification code must be 6 digits")
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Validation failed" 
+        });
+      }
+      
+      const result = await demoTenantService.verifyPhoneNumber(
+        validation.data.tenantId, 
+        validation.data.code
+      );
+      res.json(result);
+      
+    } catch (error) {
+      console.error('[Demo API] Verify phone error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+  
+  app.post("/api/demo/resend-code", resendCodeRateLimit, async (req, res) => {
+    try {
+      const { demoTenantService } = await import("./demo-tenant-service");
+      
+      const validation = z.object({
+        tenantId: z.string().min(1, "Tenant ID is required")
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Validation failed" 
+        });
+      }
+      
+      const result = await demoTenantService.resendVerificationCode(validation.data.tenantId);
+      res.json(result);
+      
+    } catch (error) {
+      console.error('[Demo API] Resend code error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
 
   // Health check with Stripe validation
   app.get("/api/health", async (req, res) => {

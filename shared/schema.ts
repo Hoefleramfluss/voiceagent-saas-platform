@@ -294,6 +294,19 @@ export const phoneNumberMappings = pgTable("phone_number_mappings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
 
+// Demo verification codes table (for persistent SMS verification)
+export const demoVerificationCodes = pgTable("demo_verification_codes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  code: varchar("code", { length: 6 }).notNull(),
+  phoneNumber: varchar("phone_number", { length: 50 }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  isUsed: boolean("is_used").notNull().default(false),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ one, many }) => ({
   users: many(users),
@@ -305,7 +318,8 @@ export const tenantsRelations = relations(tenants, ({ one, many }) => ({
   settings: one(tenantSettings),
   connectors: many(connectors),
   secrets: many(tenantSecrets),
-  phoneNumbers: many(phoneNumberMappings)
+  phoneNumbers: many(phoneNumberMappings),
+  verificationCodes: many(demoVerificationCodes)
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -425,6 +439,13 @@ export const phoneNumberMappingsRelations = relations(phoneNumberMappings, ({ on
   bot: one(bots, {
     fields: [phoneNumberMappings.botId],
     references: [bots.id]
+  })
+}));
+
+export const demoVerificationCodesRelations = relations(demoVerificationCodes, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [demoVerificationCodes.tenantId],
+    references: [tenants.id]
   })
 }));
 
@@ -559,6 +580,12 @@ export const insertPhoneNumberMappingSchema = createInsertSchema(phoneNumberMapp
   path: ["tenantId"]
 });
 
+export const insertDemoVerificationCodeSchema = createInsertSchema(demoVerificationCodes).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
@@ -595,3 +622,5 @@ export type TenantSecret = typeof tenantSecrets.$inferSelect;
 export type InsertTenantSecret = z.infer<typeof insertTenantSecretSchema>;
 export type PhoneNumberMapping = typeof phoneNumberMappings.$inferSelect;
 export type InsertPhoneNumberMapping = z.infer<typeof insertPhoneNumberMappingSchema>;
+export type DemoVerificationCode = typeof demoVerificationCodes.$inferSelect;
+export type InsertDemoVerificationCode = z.infer<typeof insertDemoVerificationCodeSchema>;
