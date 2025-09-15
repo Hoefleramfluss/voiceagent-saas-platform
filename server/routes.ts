@@ -4,7 +4,7 @@ import Stripe from "stripe";
 import { setupAuth, requireAuth, requireRole, requireTenantAccess } from "./auth";
 import { hashPassword } from "./auth";
 import { storage } from "./storage";
-import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema, insertPhoneNumberMappingSchema, updatePhoneNumberMappingSchema } from "@shared/schema";
+import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema, insertPhoneNumberMappingSchema, updatePhoneNumberMappingSchema, insertFlowSchema } from "@shared/schema";
 import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
 import { keyLoader, getStripeKey, getStripeWebhookSecret, invalidateKeyCache } from "./key-loader";
@@ -546,6 +546,707 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const bot = await storage.updateBot(req.params.botId, validation.data);
       res.json(bot);
     } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Flow Builder System - Comprehensive Flow API
+  const { FlowJsonSchema, FlowValidator, FlowTemplates } = await import("@shared/flow-schema");
+
+  // Rate limiting for flow operations
+  const flowOperationsRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 flow operations per windowMs
+    message: 'Too many flow operations, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const flowCreationRateLimit = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 20, // limit each IP to 20 flow creations per hour
+    message: 'Too many flow creations, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const flowVersionRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 50, // limit each IP to 50 version operations per windowMs
+    message: 'Too many flow version operations, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  // Flow CRUD API - Customer Admin/User access with tenant isolation
+  app.get("/api/flows", requireAuth, flowOperationsRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { limit = 50, offset = 0, includeTemplates = false } = req.query;
+      const pageSize = Math.min(parseInt(limit as string), 100);
+      const startIndex = parseInt(offset as string);
+
+      const flows = await storage.getFlows(user.tenantId);
+      
+      // Filter templates if not requested
+      const filteredFlows = includeTemplates === 'true' 
+        ? flows 
+        : flows.filter(flow => !flow.isTemplate);
+
+      // Apply pagination
+      const paginatedFlows = filteredFlows.slice(startIndex, startIndex + pageSize);
+
+      // Enrich with version information
+      const flowsWithVersions = await Promise.all(
+        paginatedFlows.map(async (flow) => {
+          const versions = await storage.getFlowVersions(flow.id, user.tenantId);
+          const liveVersion = versions.find(v => v.status === 'live');
+          const stagedVersion = versions.find(v => v.status === 'staged');
+          const draftVersion = versions.find(v => v.status === 'draft');
+          
+          return {
+            ...flow,
+            versionInfo: {
+              total: versions.length,
+              hasLive: !!liveVersion,
+              hasStaged: !!stagedVersion,
+              hasDraft: !!draftVersion,
+              latestVersion: Math.max(...versions.map(v => v.version), 0)
+            }
+          };
+        })
+      );
+
+      res.json({
+        flows: flowsWithVersions,
+        total: filteredFlows.length,
+        limit: pageSize,
+        offset: startIndex
+      });
+    } catch (error) {
+      console.error('[Flow API] Get flows error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/flows", requireAuth, flowCreationRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      // Validate flow data
+      const validation = insertFlowSchema.extend({
+        initialFlowJson: FlowJsonSchema.optional()
+      }).safeParse(req.body);
+
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Validation failed",
+          errors: validation.error.flatten()
+        });
+      }
+
+      const flowData = validation.data;
+      const { initialFlowJson, ...flowMetadata } = flowData;
+
+      // Create flow
+      const flow = await storage.createFlow({
+        ...flowMetadata,
+        tenantId: user.tenantId
+      });
+
+      // Create initial draft version if flowJson provided
+      if (initialFlowJson) {
+        const flowValidation = FlowValidator.validateFlow(initialFlowJson);
+        
+        const version = await storage.createFlowVersion({
+          flowId: flow.id,
+          version: 1,
+          status: 'draft',
+          flowJson: initialFlowJson
+        }, user.tenantId);
+
+        // Create audit log
+        await storage.createAuditLog({
+          tenantId: user.tenantId,
+          userId: user.id,
+          eventType: 'flow_created',
+          metadata: {
+            flowId: flow.id,
+            versionId: version.id,
+            flowName: flow.name,
+            isValid: flowValidation.isValid,
+            errors: flowValidation.errors
+          }
+        });
+
+        res.status(201).json({
+          ...flow,
+          currentVersion: version,
+          validation: flowValidation
+        });
+      } else {
+        // Create audit log for flow creation
+        await storage.createAuditLog({
+          tenantId: user.tenantId,
+          userId: user.id,
+          eventType: 'flow_created',
+          metadata: {
+            flowId: flow.id,
+            flowName: flow.name
+          }
+        });
+
+        res.status(201).json(flow);
+      }
+    } catch (error) {
+      console.error('[Flow API] Create flow error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/flows/:id", requireAuth, flowOperationsRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id } = req.params;
+      const { includeVersions = 'true' } = req.query;
+
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      if (includeVersions === 'true') {
+        const versions = await storage.getFlowVersions(id, user.tenantId);
+        const liveVersion = await storage.getFlowVersionByStatus(id, 'live', user.tenantId);
+        const stagedVersion = await storage.getFlowVersionByStatus(id, 'staged', user.tenantId);
+        const draftVersion = await storage.getFlowVersionByStatus(id, 'draft', user.tenantId);
+
+        res.json({
+          ...flow,
+          versions: versions.map(v => ({
+            ...v,
+            flowJson: undefined // Don't include full JSON in list
+          })),
+          currentVersions: {
+            live: liveVersion,
+            staged: stagedVersion,
+            draft: draftVersion
+          }
+        });
+      } else {
+        res.json(flow);
+      }
+    } catch (error) {
+      console.error('[Flow API] Get flow error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.patch("/api/flows/:id", requireAuth, flowOperationsRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id } = req.params;
+      
+      // Check if flow exists and user has access
+      const existingFlow = await storage.getFlow(id, user.tenantId);
+      if (!existingFlow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      // Validate update data (only allow certain fields to be updated)
+      const updateFlowSchema = z.object({
+        name: z.string().min(1).max(255).optional(),
+        description: z.string().max(1000).optional(),
+        isTemplate: z.boolean().optional(),
+        templateVariables: z.record(z.any()).optional()
+      });
+
+      const validation = updateFlowSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Validation failed",
+          errors: validation.error.flatten()
+        });
+      }
+
+      const updatedFlow = await storage.updateFlow(id, user.tenantId, validation.data);
+
+      // Create audit log
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'flow_updated',
+        metadata: {
+          flowId: id,
+          flowName: updatedFlow.name,
+          updates: validation.data
+        }
+      });
+
+      res.json(updatedFlow);
+    } catch (error) {
+      console.error('[Flow API] Update flow error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/flows/:id", requireAuth, flowOperationsRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id } = req.params;
+      
+      // Check if flow exists and user has access
+      const existingFlow = await storage.getFlow(id, user.tenantId);
+      if (!existingFlow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      // Check if flow is being used by any bots
+      const bots = await storage.getBots(user.tenantId);
+      const botsUsingFlow = bots.filter(bot => bot.currentFlowId === id);
+      
+      if (botsUsingFlow.length > 0) {
+        return res.status(400).json({
+          message: "Cannot delete flow - it is currently being used by active bots",
+          usedBy: botsUsingFlow.map(bot => ({ id: bot.id, name: bot.name }))
+        });
+      }
+
+      await storage.deleteFlow(id, user.tenantId);
+
+      // Create audit log
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'flow_deleted',
+        metadata: {
+          flowId: id,
+          flowName: existingFlow.name
+        }
+      });
+
+      res.json({ message: "Flow deleted successfully" });
+    } catch (error) {
+      console.error('[Flow API] Delete flow error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Flow Version API - Complete versioning workflow
+  app.get("/api/flows/:id/versions", requireAuth, flowVersionRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id } = req.params;
+      const { includeFlowJson = 'false' } = req.query;
+
+      // Verify flow access
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      const versions = await storage.getFlowVersions(id, user.tenantId);
+
+      // Optionally exclude flowJson for performance
+      const responseVersions = versions.map(version => {
+        if (includeFlowJson === 'false') {
+          const { flowJson, ...versionWithoutJson } = version;
+          return {
+            ...versionWithoutJson,
+            hasFlowJson: !!flowJson,
+            validation: flowJson ? FlowValidator.validateFlow(flowJson) : null
+          };
+        }
+        return {
+          ...version,
+          validation: FlowValidator.validateFlow(version.flowJson)
+        };
+      });
+
+      res.json({
+        flowId: id,
+        flowName: flow.name,
+        versions: responseVersions
+      });
+    } catch (error) {
+      console.error('[Flow API] Get flow versions error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/flows/:id/versions", requireAuth, flowVersionRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id } = req.params;
+
+      // Verify flow access
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      // Validate flow JSON
+      const { flowJson } = req.body;
+      if (!flowJson) {
+        return res.status(400).json({ message: "flowJson is required" });
+      }
+
+      const flowValidation = FlowValidator.validateFlow(flowJson);
+      if (!flowValidation.isValid) {
+        return res.status(400).json({
+          message: "Invalid flow JSON",
+          validation: flowValidation
+        });
+      }
+
+      // Get next version number
+      const existingVersions = await storage.getFlowVersions(id, user.tenantId);
+      const nextVersion = Math.max(...existingVersions.map(v => v.version), 0) + 1;
+
+      // Check if there's already a draft version
+      const existingDraft = await storage.getFlowVersionByStatus(id, 'draft', user.tenantId);
+      if (existingDraft) {
+        return res.status(400).json({
+          message: "A draft version already exists. Please update the existing draft or promote it first.",
+          existingDraft: { id: existingDraft.id, version: existingDraft.version }
+        });
+      }
+
+      const version = await storage.createFlowVersion({
+        flowId: id,
+        version: nextVersion,
+        status: 'draft',
+        flowJson
+      }, user.tenantId);
+
+      // Create audit log
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'flow_version_created',
+        metadata: {
+          flowId: id,
+          versionId: version.id,
+          version: version.version,
+          flowName: flow.name,
+          validation: flowValidation
+        }
+      });
+
+      res.status(201).json({
+        ...version,
+        validation: flowValidation
+      });
+    } catch (error) {
+      console.error('[Flow API] Create flow version error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/flows/:id/versions/:versionId", requireAuth, flowVersionRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id, versionId } = req.params;
+
+      // Verify flow access
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      const version = await storage.getFlowVersion(versionId, user.tenantId);
+      if (!version || version.flowId !== id) {
+        return res.status(404).json({ message: "Flow version not found" });
+      }
+
+      const validation = FlowValidator.validateFlow(version.flowJson);
+
+      res.json({
+        ...version,
+        validation
+      });
+    } catch (error) {
+      console.error('[Flow API] Get flow version error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.patch("/api/flows/:id/versions/:versionId", requireAuth, flowVersionRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id, versionId } = req.params;
+
+      // Verify flow and version access
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      const version = await storage.getFlowVersion(versionId, user.tenantId);
+      if (!version || version.flowId !== id) {
+        return res.status(404).json({ message: "Flow version not found" });
+      }
+
+      // Only draft versions can be updated
+      if (version.status !== 'draft') {
+        return res.status(400).json({
+          message: "Only draft versions can be updated. Create a new version to modify staged or live flows."
+        });
+      }
+
+      const { flowJson } = req.body;
+      if (!flowJson) {
+        return res.status(400).json({ message: "flowJson is required" });
+      }
+
+      const flowValidation = FlowValidator.validateFlow(flowJson);
+      if (!flowValidation.isValid) {
+        return res.status(400).json({
+          message: "Invalid flow JSON",
+          validation: flowValidation
+        });
+      }
+
+      const updatedVersion = await storage.updateFlowVersion(versionId, user.tenantId, {
+        flowJson,
+        updatedAt: new Date()
+      });
+
+      // Create audit log
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'flow_version_updated',
+        metadata: {
+          flowId: id,
+          versionId,
+          version: version.version,
+          flowName: flow.name,
+          validation: flowValidation
+        }
+      });
+
+      res.json({
+        ...updatedVersion,
+        validation: flowValidation
+      });
+    } catch (error) {
+      console.error('[Flow API] Update flow version error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/flows/:id/versions/:versionId/promote", requireAuth, flowVersionRateLimit, auditSensitiveOperation('FLOW_VERSION_PROMOTE'), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id, versionId } = req.params;
+      const { targetStatus } = req.body;
+
+      if (!targetStatus || !['staged', 'live'].includes(targetStatus)) {
+        return res.status(400).json({
+          message: "targetStatus must be 'staged' or 'live'"
+        });
+      }
+
+      // Verify flow and version access
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      const version = await storage.getFlowVersion(versionId, user.tenantId);
+      if (!version || version.flowId !== id) {
+        return res.status(404).json({ message: "Flow version not found" });
+      }
+
+      // Validate promotion workflow
+      if (targetStatus === 'staged' && version.status !== 'draft') {
+        return res.status(400).json({
+          message: "Only draft versions can be promoted to staged"
+        });
+      }
+
+      if (targetStatus === 'live' && !['draft', 'staged'].includes(version.status)) {
+        return res.status(400).json({
+          message: "Only draft or staged versions can be promoted to live"
+        });
+      }
+
+      // Validate flow JSON before promotion
+      const flowValidation = FlowValidator.validateFlow(version.flowJson);
+      if (!flowValidation.isValid) {
+        return res.status(400).json({
+          message: "Cannot promote invalid flow",
+          validation: flowValidation
+        });
+      }
+
+      // For live promotion, demote current live version if exists
+      if (targetStatus === 'live') {
+        const currentLive = await storage.getFlowVersionByStatus(id, 'live', user.tenantId);
+        if (currentLive && currentLive.id !== versionId) {
+          await storage.archiveFlowVersion(currentLive.id, user.tenantId);
+        }
+
+        // Update all bots using this flow to the new live version
+        const bots = await storage.getBots(user.tenantId);
+        const botsUsingFlow = bots.filter(bot => bot.currentFlowId === id);
+        
+        for (const bot of botsUsingFlow) {
+          // The currentFlowId stays the same, but the live version changes
+          // This could trigger bot redeployment in a real system
+        }
+      }
+
+      const promotedVersion = await storage.publishFlowVersion(versionId, user.tenantId, user.id);
+
+      // Create audit log
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'flow_version_promoted',
+        metadata: {
+          flowId: id,
+          versionId,
+          version: version.version,
+          flowName: flow.name,
+          fromStatus: version.status,
+          toStatus: targetStatus,
+          affectedBots: targetStatus === 'live' ? bots.filter(bot => bot.currentFlowId === id).length : 0
+        }
+      });
+
+      res.json({
+        ...promotedVersion,
+        validation: flowValidation,
+        message: `Flow version promoted to ${targetStatus} successfully`
+      });
+    } catch (error) {
+      console.error('[Flow API] Promote flow version error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/flows/:id/versions/:versionId/archive", requireAuth, flowVersionRateLimit, auditSensitiveOperation('FLOW_VERSION_ARCHIVE'), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { id, versionId } = req.params;
+
+      // Verify flow and version access
+      const flow = await storage.getFlow(id, user.tenantId);
+      if (!flow) {
+        return res.status(404).json({ message: "Flow not found" });
+      }
+
+      const version = await storage.getFlowVersion(versionId, user.tenantId);
+      if (!version || version.flowId !== id) {
+        return res.status(404).json({ message: "Flow version not found" });
+      }
+
+      // Cannot archive live versions
+      if (version.status === 'live') {
+        return res.status(400).json({
+          message: "Cannot archive live version. Promote another version to live first."
+        });
+      }
+
+      const archivedVersion = await storage.archiveFlowVersion(versionId, user.tenantId);
+
+      // Create audit log
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'flow_version_archived',
+        metadata: {
+          flowId: id,
+          versionId,
+          version: version.version,
+          flowName: flow.name,
+          previousStatus: version.status
+        }
+      });
+
+      res.json({
+        ...archivedVersion,
+        message: "Flow version archived successfully"
+      });
+    } catch (error) {
+      console.error('[Flow API] Archive flow version error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Flow Templates API - Utility endpoints for flow creation
+  app.get("/api/flows/templates/basic-greeting", requireAuth, flowOperationsRateLimit, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { companyName, greetingMessage, systemPrompt } = req.query;
+      
+      if (!companyName) {
+        return res.status(400).json({ message: "companyName query parameter is required" });
+      }
+
+      const template = FlowTemplates.createBasicGreetingFlow({
+        companyName: companyName as string,
+        greetingMessage: greetingMessage as string,
+        systemPrompt: systemPrompt as string
+      });
+
+      const validation = FlowValidator.validateFlow(template);
+
+      res.json({
+        template,
+        validation
+      });
+    } catch (error) {
+      console.error('[Flow API] Get template error:', error);
       res.status(500).json({ message: (error as Error).message });
     }
   });
