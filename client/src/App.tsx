@@ -18,6 +18,7 @@ import CustomerDashboard from "@/pages/customer/dashboard";
 import CustomerUsage from "@/pages/customer/usage";
 import CustomerBilling from "@/pages/customer/billing-enhanced";
 import CustomerSupport from "@/pages/customer/support";
+import FlowBuilder from "@/pages/customer/flow-builder";
 import DemoSetup from "@/pages/demo-setup";
 
 function Router() {
@@ -40,6 +41,7 @@ function Router() {
       
       {/* Customer routes */}
       <ProtectedRoute path="/" component={CustomerDashboard} roles={['customer_admin', 'customer_user']} />
+      <ProtectedRoute path="/flows" component={FlowBuilder} roles={['customer_admin', 'customer_user']} />
       <ProtectedRoute path="/usage" component={CustomerUsage} roles={['customer_admin', 'customer_user']} />
       <ProtectedRoute path="/billing" component={CustomerBilling} roles={['customer_admin', 'customer_user']} />
       <ProtectedRoute path="/support" component={CustomerSupport} roles={['customer_admin', 'customer_user']} />

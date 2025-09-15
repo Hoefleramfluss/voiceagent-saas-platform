@@ -10,11 +10,13 @@ import {
   Headphones, 
   User,
   Key,
-  LogOut
+  LogOut,
+  GitBranch
 } from "lucide-react";
 
 const getNavigation = (t: any) => [
   { name: t('overview'), href: "/", icon: BarChart },
+  { name: "Flow Builder", href: "/flows", icon: GitBranch },
   { name: t('usageAnalytics'), href: "/usage", icon: Phone },
   { name: t('billingInvoices'), href: "/billing", icon: Receipt },
   { name: t('support'), href: "/support", icon: Headphones },

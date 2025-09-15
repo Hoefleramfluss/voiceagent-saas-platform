@@ -1,5 +1,7 @@
 // API Response Types for React Query
 import type { Tenant, Bot, UsageEvent, SupportTicket, User } from "./schema";
+import type { FlowJsonSchema } from "./flow-schema";
+import { z } from "zod";
 
 // JSON-serialized versions of database types (Date -> string, null preserved)
 export type SerializedBot = Omit<Bot, 'createdAt' | 'updatedAt'> & {
@@ -159,6 +161,57 @@ export interface AdminBillingOverviewResponse {
   invoices: BillingInvoice[];
 }
 
+// Flow API Types
+export type FlowData = {
+  id: string;
+  name: string;
+  description?: string;
+  locale: string;
+  timezone: string;
+  systemPrompt: string;
+  flow?: z.infer<typeof FlowJsonSchema>;
+  status: 'draft' | 'staged' | 'live';
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FlowVersion = {
+  id: string;
+  flowId: string;
+  stage: 'draft' | 'staged' | 'live';
+  version: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export interface FlowsResponse {
+  flows: FlowData[];
+}
+
+export interface FlowVersionsResponse {
+  versions: FlowVersion[];
+}
+
+export interface CreateFlowRequest {
+  name: string;
+  description?: string;
+  locale?: string;
+  timezone?: string;
+  systemPrompt: string;
+  flow?: any;
+}
+
+export interface UpdateFlowRequest {
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  flow?: any;
+}
+
+export interface PromoteVersionRequest {
+  targetStage: 'staged' | 'live';
+}
+
 // Query key types for type-safe React Query usage
 export type QueryKeys = 
   | ["/api/health"]
@@ -172,4 +225,7 @@ export type QueryKeys =
   | ["/api/billing/current-usage"]
   | ["/api/billing/invoices"]
   | ["/api/billing/pricing"]
-  | ["/api/admin/billing/overview", string, string]; // admin billing with params
+  | ["/api/admin/billing/overview", string, string] // admin billing with params
+  | ["/api/flows"]
+  | ["/api/flows", string] // with flowId
+  | ["/api/flows", string, "versions"]; // flow versions
