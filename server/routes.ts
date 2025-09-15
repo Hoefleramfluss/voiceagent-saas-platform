@@ -31,7 +31,15 @@ import {
   oauthAuthorizationRateLimit,
   oauthCallbackRateLimit
 } from "./security-controls";
+import rateLimit from "express-rate-limit";
 import { normalizePhoneNumber, validateBotOwnership } from "./phone-security-utils";
+import { createTwilioValidationMiddleware } from "./twilio-verification";
+import { 
+  enterpriseDemoRateLimit, 
+  enterprisePhoneVerificationRateLimit, 
+  enterpriseAuthRateLimit,
+  enterpriseTwilioWebhookRateLimit
+} from "./enterprise-security";
 import crypto from "crypto";
 
 // Stripe instance - will be initialized dynamically when needed
@@ -1683,41 +1691,236 @@ export async function registerRoutes(app: Express): Promise<Server> {
     disconnectConnector
   );
 
-  // Twilio webhooks (for incoming calls)
-  app.post("/telephony/incoming", async (req, res) => {
+  // Raw body is now properly captured in server/index.ts BEFORE global body parsing
+  // This ensures Twilio signature verification works without hanging requests
+
+  // Twilio webhooks (for incoming calls) - PRODUCTION HARDENED
+  app.post("/telephony/incoming", 
+    createTwilioValidationMiddleware(), // SECURITY: Webhook signature verification
+    enterpriseTwilioWebhookRateLimit, // SECURITY: Twilio-specific rate limiting protection
+    async (req, res) => {
     try {
-      // Log incoming call
-      console.log("Incoming call:", req.body);
+      // Extract and validate call information
+      const { CallSid, From, To, CallStatus = 'initiated' } = req.body;
       
-      // Extract call information
-      const { CallSid, From, To } = req.body;
+      if (!CallSid || !From || !To) {
+        console.warn('[TwilioWebhook] Missing required call parameters:', { CallSid, From, To });
+        return res.status(400).set('Content-Type', 'text/xml').send(
+          '<Response><Say voice="alice">Call cannot be processed. Please try again.</Say></Response>'
+        );
+      }
       
-      // TODO: Find bot by phone number and create usage event
-      // This would be implemented with actual Twilio integration
+      // SECURITY: Normalize and validate phone numbers
+      let normalizedTo: string;
+      let normalizedFrom: string;
+      try {
+        normalizedTo = normalizePhoneNumber(To);
+        normalizedFrom = normalizePhoneNumber(From);
+      } catch (error) {
+        console.warn('[TwilioWebhook] Phone number validation failed:', { From, To, error: error instanceof Error ? error.message : 'Unknown' });
+        return res.status(400).set('Content-Type', 'text/xml').send(
+          '<Response><Say voice="alice">Invalid phone number format. Please check and try again.</Say></Response>'
+        );
+      }
+      
+      // TENANT ROUTING: Find bot by phone number mapping
+      let phoneMapping, bot, tenant;
+      try {
+        phoneMapping = await storage.getPhoneNumberMapping(normalizedTo);
+        if (!phoneMapping) {
+          console.warn('[TwilioWebhook] No bot mapping found for phone number:', normalizedTo);
+          // AUDIT: Log unmapped phone number attempts
+          await auditSensitiveOperation('UNMAPPED_PHONE_CALL', {
+            callSid: CallSid,
+            from: normalizedFrom,
+            to: normalizedTo,
+            reason: 'No bot mapping found'
+          })(req as any, res as any, () => {});
+          
+          return res.status(404).set('Content-Type', 'text/xml').send(
+            '<Response><Say voice="alice">This number is not currently available. Please contact support.</Say></Response>'
+          );
+        }
+        
+        // Get bot and tenant information for tenant isolation
+        bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId);
+        tenant = await storage.getTenant(phoneMapping.tenantId);
+        
+        if (!bot || !tenant) {
+          console.error('[TwilioWebhook] Bot or tenant not found:', { botId: phoneMapping.botId, tenantId: phoneMapping.tenantId });
+          return res.status(500).set('Content-Type', 'text/xml').send(
+            '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
+          );
+        }
+      } catch (error) {
+        console.error('[TwilioWebhook] Database lookup error:', error);
+        return res.status(500).set('Content-Type', 'text/xml').send(
+          '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
+        );
+      }
+      
+      // AUDIT LOGGING: Track incoming call with full context
+      try {
+        await auditSensitiveOperation('INCOMING_CALL_RECEIVED', {
+          callSid: CallSid,
+          from: normalizedFrom,
+          to: normalizedTo,
+          tenantId: tenant.id,
+          botId: bot.id,
+          callStatus: CallStatus,
+          timestamp: new Date().toISOString()
+        })(req as any, res as any, () => {});
+      } catch (auditError) {
+        console.warn('[TwilioWebhook] Audit logging failed:', auditError);
+        // Continue processing even if audit fails
+      }
+      
+      // USAGE EVENT CREATION: Track for billing
+      try {
+        await storage.createUsageEvent({
+          tenantId: tenant.id,
+          botId: bot.id,
+          eventType: 'voice_call_initiated',
+          quantity: 1,
+          metadata: {
+            callSid: CallSid,
+            from: normalizedFrom,
+            to: normalizedTo,
+            callStatus: CallStatus,
+            direction: 'inbound'
+          },
+          timestamp: new Date()
+        });
+      } catch (usageError) {
+        console.warn('[TwilioWebhook] Usage event creation failed:', usageError);
+        // Continue processing even if usage tracking fails
+      }
+      
+      // Generate tenant-specific TwiML response
+      const botName = bot.name || 'VoiceBot';
+      const greeting = bot.metadata?.greeting || `Hello! Welcome to ${tenant.name}. Your call is being processed by ${botName}.`;
       
       // Respond with TwiML
       res.set('Content-Type', 'text/xml');
       res.send(`
         <Response>
-          <Say voice="alice">Hello! Your call is being processed by our VoiceBot.</Say>
+          <Say voice="alice">${greeting}</Say>
           <Pause length="1"/>
-          <Say voice="alice">Please hold while we connect you.</Say>
+          <Say voice="alice">Please hold while we connect you to our system.</Say>
         </Response>
       `);
+      
+      console.log(`[TwilioWebhook] Successfully processed incoming call: ${CallSid} for tenant ${tenant.name}`);
+      
     } catch (error) {
-      console.error("Telephony webhook error:", error);
-      res.status(500).send("Internal server error");
+      console.error('[TwilioWebhook] Unhandled error in incoming webhook:', error);
+      // SECURITY: Don't leak error details to external callers
+      res.status(500).set('Content-Type', 'text/xml').send(
+        '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
+      );
     }
   });
 
-  app.post("/telephony/status", async (req, res) => {
+  app.post("/telephony/status", 
+    createTwilioValidationMiddleware(), // SECURITY: Webhook signature verification
+    enterpriseTwilioWebhookRateLimit, // SECURITY: Twilio-specific rate limiting protection
+    async (req, res) => {
     try {
-      // Handle call status updates
-      console.log("Call status update:", req.body);
+      // Extract status update information
+      const { 
+        CallSid, 
+        CallStatus, 
+        From, 
+        To, 
+        CallDuration, 
+        Direction,
+        AnsweredBy,
+        Timestamp 
+      } = req.body;
+      
+      if (!CallSid || !CallStatus) {
+        console.warn('[TwilioWebhook] Missing required status parameters:', { CallSid, CallStatus });
+        return res.sendStatus(400);
+      }
+      
+      // Find tenant and bot information for proper context
+      let phoneMapping, bot, tenant;
+      if (To) {
+        try {
+          const normalizedTo = normalizePhoneNumber(To);
+          phoneMapping = await storage.getPhoneNumberMapping(normalizedTo);
+          if (phoneMapping) {
+            bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId);
+            tenant = await storage.getTenant(phoneMapping.tenantId);
+          }
+        } catch (error) {
+          console.warn('[TwilioWebhook] Could not resolve phone mapping for status update:', error);
+          // Continue processing even without mapping
+        }
+      }
+      
+      // AUDIT LOGGING: Track call status changes with context
+      try {
+        await auditSensitiveOperation('CALL_STATUS_UPDATE', {
+          callSid: CallSid,
+          callStatus: CallStatus,
+          from: From,
+          to: To,
+          direction: Direction,
+          duration: CallDuration,
+          answeredBy: AnsweredBy,
+          tenantId: tenant?.id,
+          botId: bot?.id,
+          timestamp: Timestamp || new Date().toISOString()
+        })(req as any, res as any, () => {});
+      } catch (auditError) {
+        console.warn('[TwilioWebhook] Status audit logging failed:', auditError);
+      }
+      
+      // USAGE EVENT CREATION: Track billable events
+      if (tenant && bot && CallDuration && parseInt(CallDuration) > 0) {
+        try {
+          // Create usage event for completed calls with duration
+          await storage.createUsageEvent({
+            tenantId: tenant.id,
+            botId: bot.id,
+            eventType: CallStatus === 'completed' ? 'voice_call_completed' : 'voice_call_status',
+            quantity: parseInt(CallDuration), // Duration in seconds
+            metadata: {
+              callSid: CallSid,
+              callStatus: CallStatus,
+              from: From,
+              to: To,
+              direction: Direction || 'inbound',
+              duration: CallDuration,
+              answeredBy: AnsweredBy,
+              finalStatus: CallStatus
+            },
+            timestamp: new Date()
+          });
+          
+          console.log(`[TwilioWebhook] Created usage event for call ${CallSid}: ${CallDuration}s`);
+        } catch (usageError) {
+          console.warn('[TwilioWebhook] Usage event creation failed for status update:', usageError);
+        }
+      }
+      
+      // Log status update with context
+      const logContext = {
+        callSid: CallSid,
+        status: CallStatus,
+        duration: CallDuration,
+        tenant: tenant?.name,
+        bot: bot?.name
+      };
+      console.log('[TwilioWebhook] Call status update processed:', logContext);
+      
       res.sendStatus(200);
+      
     } catch (error) {
-      console.error("Status webhook error:", error);
-      res.status(500).send("Internal server error");
+      console.error('[TwilioWebhook] Unhandled error in status webhook:', error);
+      // SECURITY: Don't leak error details to external services
+      res.sendStatus(500);
     }
   });
 

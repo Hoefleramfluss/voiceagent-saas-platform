@@ -8,10 +8,8 @@ import { getResilienceHealth } from "./retry-utils";
 
 const app = express();
 
-// Trust proxy for proper IP handling behind load balancers
-if (process.env.NODE_ENV === 'production') {
-  app.set('trust proxy', true);
-}
+// Trust proxy for proper IP handling behind load balancers and URL reconstruction
+app.set('trust proxy', 1);
 
 // Set up production security middleware early
 const securityConfig = getSecurityConfig();
@@ -22,6 +20,14 @@ setupHealthCheck(app);
 
 // Special raw body parsing for Stripe webhooks BEFORE other middleware
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+
+// Special raw body parsing for Twilio webhooks BEFORE other middleware
+app.use('/telephony', express.urlencoded({ 
+  extended: false, 
+  verify: (req, _res, buf) => { 
+    (req as any).rawBody = buf.toString('utf8'); 
+  } 
+}));
 
 // Regular JSON and URL-encoded body parsing for other routes with size limits
 const bodyLimit = process.env.NODE_ENV === 'production' ? '1mb' : '10mb';

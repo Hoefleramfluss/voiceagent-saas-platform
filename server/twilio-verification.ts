@@ -107,6 +107,7 @@ export async function validateTwilioWebhookRequest(
   request: {
     headers: Record<string, string | string[] | undefined>;
     body: any;
+    rawBody?: string;
     url?: string;
     protocol?: string;
     hostname?: string;
@@ -124,10 +125,17 @@ export async function validateTwilioWebhookRequest(
       };
     }
     
-    // Construct URL if not provided
+    // Construct URL with proxy header support
     let webhookUrl = url;
-    if (!webhookUrl && request.protocol && request.hostname) {
-      webhookUrl = `${request.protocol}://${request.hostname}${request.originalUrl || request.url || ''}`;
+    if (!webhookUrl) {
+      // Handle proxy headers for proper URL construction
+      const protocol = request.headers['x-forwarded-proto'] || request.protocol || 'https';
+      const host = request.headers['x-forwarded-host'] || request.hostname;
+      const originalUrl = request.originalUrl || request.url || '';
+      
+      if (host) {
+        webhookUrl = `${protocol}://${host}${originalUrl}`;
+      }
     }
     
     if (!webhookUrl) {
@@ -137,12 +145,18 @@ export async function validateTwilioWebhookRequest(
       };
     }
     
-    // Convert body to string format expected by Twilio
+    // CRITICAL SECURITY: Use raw body for signature verification
     let bodyString = '';
-    if (typeof request.body === 'string') {
+    if (request.rawBody) {
+      // Use captured raw body (preferred for security)
+      bodyString = request.rawBody;
+      console.log('[TwilioVerification] Using captured raw body for signature verification');
+    } else if (typeof request.body === 'string') {
+      // Fallback to string body if raw body not available
       bodyString = request.body;
+      console.warn('[TwilioVerification] Using string body fallback - raw body preferred for security');
     } else if (request.body && typeof request.body === 'object') {
-      // Convert object to URL-encoded string
+      // Convert object to URL-encoded string (least secure fallback)
       const params = new URLSearchParams();
       for (const [key, value] of Object.entries(request.body)) {
         if (value !== undefined && value !== null) {
@@ -150,6 +164,7 @@ export async function validateTwilioWebhookRequest(
         }
       }
       bodyString = params.toString();
+      console.warn('[TwilioVerification] Using reconstructed body - raw body preferred for security');
     }
     
     return await validateTwilioSignature(webhookUrl, bodyString, signature);
