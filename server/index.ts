@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupProductionSecurity, setupHealthCheck, getSecurityConfig } from "./production-security";
+import { automatedInvoiceService } from "./automated-invoice-service";
 
 const app = express();
 
@@ -163,6 +164,10 @@ app.use((req, res, next) => {
       console.log(`[STARTUP] 🚀 Server listening on http://${host}:${port}`);
       console.log(`[STARTUP] Environment: ${process.env.NODE_ENV || 'development'}`);
       log(`serving on port ${port}`);
+      
+      // Start automated invoice generation scheduler
+      automatedInvoiceService.startScheduler();
+      console.log(`[STARTUP] 📅 Automated invoice scheduler initialized`);
     });
     
     // Handle server errors

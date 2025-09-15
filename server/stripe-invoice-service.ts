@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 import { storage } from "./storage";
-import { billingCalculator, BillingCalculation } from "./billing-calculator";
+import { enhancedBillingCalculator, EnhancedBillingCalculation } from "./enhanced-billing-calculator";
 import { getStripeKey } from "./key-loader";
 import crypto from "crypto";
 
@@ -100,8 +100,8 @@ export class StripeInvoiceService {
         };
       }
 
-      // Calculate billing for the period
-      const billingCalculation = await billingCalculator.calculateBillingForPeriod(
+      // Calculate enhanced billing for the period with subscription plan logic
+      const billingCalculation = await enhancedBillingCalculator.calculateEnhancedBillingForPeriod(
         tenantId,
         periodStart,
         periodEnd
