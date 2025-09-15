@@ -24,10 +24,41 @@ export async function hashPassword(password: string) {
 }
 
 async function comparePasswords(supplied: string, stored: string) {
-  const [hashed, salt] = stored.split(".");
-  const hashedBuf = Buffer.from(hashed, "hex");
-  const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
-  return timingSafeEqual(hashedBuf, suppliedBuf);
+  try {
+    // Check if stored password is in expected scrypt format (hex.salt)
+    if (!stored || !stored.includes('.')) {
+      console.error('[Auth] Invalid password format - expected scrypt hex.salt format');
+      return false;
+    }
+
+    const [hashed, salt] = stored.split(".");
+    
+    // Validate that we have both parts
+    if (!hashed || !salt) {
+      console.error('[Auth] Malformed password hash - missing hash or salt');
+      return false;
+    }
+
+    // Validate hex format
+    if (!/^[a-fA-F0-9]+$/.test(hashed) || !/^[a-fA-F0-9]+$/.test(salt)) {
+      console.error('[Auth] Invalid hex format in password hash');
+      return false;
+    }
+
+    const hashedBuf = Buffer.from(hashed, "hex");
+    const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
+    
+    // Ensure buffers are same length before comparison
+    if (hashedBuf.length !== suppliedBuf.length) {
+      console.error('[Auth] Buffer length mismatch in password comparison');
+      return false;
+    }
+    
+    return timingSafeEqual(hashedBuf, suppliedBuf);
+  } catch (error) {
+    console.error('[Auth] Password comparison error:', error);
+    return false;
+  }
 }
 
 const loginSchema = z.object({
@@ -143,20 +174,84 @@ export function setupAuth(app: Express) {
           req.login(user, (loginErr) => {
             if (loginErr) return next(loginErr);
             
-            // SECURITY: Never return password hash or sensitive data
-            const safeUser = {
-              id: user.id,
-              email: user.email,
-              role: user.role,
-              tenantId: user.tenantId,
-              firstName: user.firstName,
-              lastName: user.lastName,
-              isActive: user.isActive,
-              lastLoginAt: user.lastLoginAt,
-              createdAt: user.createdAt,
-              updatedAt: user.updatedAt
-            };
-            res.json(safeUser);
+            // SECURITY: Explicitly save session to ensure cookie is flushed
+            req.session.save((saveErr) => {
+              if (saveErr) {
+                console.error('[Security] Session save failed after login:', saveErr);
+                return next(saveErr);
+              }
+              
+              // SECURITY: Never return password hash or sensitive data
+              const safeUser = {
+                id: user.id,
+                email: user.email,
+                role: user.role,
+                tenantId: user.tenantId,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                isActive: user.isActive,
+                lastLoginAt: user.lastLoginAt,
+                createdAt: user.createdAt,
+                updatedAt: user.updatedAt
+              };
+              res.json(safeUser);
+            });
+          });
+        });
+      });
+    })(req, res, next);
+  });
+
+  // Add route alias for /api/auth/login to match common expectations
+  app.post("/api/auth/login", loginRateLimit, (req, res, next) => {
+    const validation = loginSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ 
+        message: "Validation failed", 
+        errors: validation.error.flatten() 
+      });
+    }
+
+    passport.authenticate("local", (err: any, user: SelectUser | false) => {
+      if (err) return next(err);
+      if (!user) return res.status(401).json({ message: "Invalid credentials" });
+
+      req.login(user, (err) => {
+        if (err) return next(err);
+        
+        // SECURITY: Regenerate session to prevent session fixation attacks
+        req.session.regenerate((regenerateErr) => {
+          if (regenerateErr) {
+            console.error('[Security] Session regeneration failed on login:', regenerateErr);
+            return next(regenerateErr);
+          }
+          
+          // Re-authenticate after session regeneration
+          req.login(user, (loginErr) => {
+            if (loginErr) return next(loginErr);
+            
+            // SECURITY: Explicitly save session to ensure cookie is flushed
+            req.session.save((saveErr) => {
+              if (saveErr) {
+                console.error('[Security] Session save failed after login:', saveErr);
+                return next(saveErr);
+              }
+              
+              // SECURITY: Never return password hash or sensitive data
+              const safeUser = {
+                id: user.id,
+                email: user.email,
+                role: user.role,
+                tenantId: user.tenantId,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                isActive: user.isActive,
+                lastLoginAt: user.lastLoginAt,
+                createdAt: user.createdAt,
+                updatedAt: user.updatedAt
+              };
+              res.json(safeUser);
+            });
           });
         });
       });

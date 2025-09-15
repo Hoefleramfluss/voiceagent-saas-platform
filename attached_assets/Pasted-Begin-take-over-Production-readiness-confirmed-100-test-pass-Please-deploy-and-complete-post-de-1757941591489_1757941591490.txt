@@ -1,0 +1,31 @@
+Begin take over.
+Production readiness confirmed (100% test pass). Please deploy and complete post-deployment hardening & validation. You may spawn sub-agents. Do not expose secrets. Report PASS/FAIL with brief evidence (logs/JSON/screenshots).
+A) Deploy & Environment
+Publish/Deploy the app to production.
+Verify environment: correct .env/Secrets loaded (no rk_/sk_ in frontend, pk_ only).
+Run smoke tests against the production URL (health, auth, admin pages).
+B) Post-Deploy Validation
+Health: /api/health → database/redis/stripe = "operational".
+Admin UI (German default):
+“ABRECHNUNGEN” loads; filters use "all" (no empty Select values).
+Labels/messages in de-DE across key screens.
+Twilio routing: simulate two inbound calls (two tenants) → correct live flow per normalized E.164.
+Billing: simulate voicebot + transfer minutes; monthly aggregator deducts free minutes; sample invoice payload generated.
+Stripe:
+Frontend console clean; import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY starts with pk_.
+Backend health uses secret key; webhook test green (raw body).
+Connectors: OAuth (Google Calendar) happy path creates event; CSRF/HMAC state + nonce persistence verified; wrong tenant → 403.
+Security: WAF allows legitimate /admin assets, blocks exploit patterns; IPv6-safe rate limits emitting metrics; no secrets in logs (prefixes only).
+C) Minor Optimizations (post-deploy)
+Stripe key decryption: confirm env-fallback works; add brief doc note.
+Billing E2E doc: short how-to for simulating minutes & verifying aggregation.
+German localization check: scan main routes, ensure no mixed locales.
+Accounts: ensure demo admin is scoped; rotate any temp creds; remove debug users.
+D) Monitoring & Rollback
+Enable uptime check + alert for /api/health and webhook latencies (P95).
+Add runbook excerpt: quick rollback steps + config diff checklist.
+Deliverables
+Deployed URL, smoke test results, screenshots/JSON evidence.
+Short release notes + links to Test Report & Security Note.
+Confirmation that temporary credentials were rotated/removed.
+If any check fails, auto-fix, re-run, and update the report until all items PASS. Proceed.
