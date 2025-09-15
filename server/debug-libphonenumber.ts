@@ -8,15 +8,15 @@ import { parsePhoneNumber, isValidPhoneNumber, getCountries, CountryCode } from 
 
 console.log('🔍 Debugging libphonenumber-js validation behavior...\n');
 
-// Test cases that are failing
+// Test cases with valid phone numbers
 const testNumbers = [
-  '+15551234567', // US test number  
-  '+12121234567', // US NYC number
-  '+447911123456', // UK mobile
+  '+15551234567', // US test number (555 is test range)  
+  '+12125551234', // Valid NYC test number
+  '+447700900123', // UK test number
   '+4367712345678', // Austrian mobile (working)
   '+4915112345678', // German mobile (working)
-  '5551234567', // 10-digit US
-  '2121234567' // 10-digit NYC
+  '+14155552001', // Valid SF test number
+  '4155552001' // 10-digit SF test
 ];
 
 console.log('📞 Testing individual number validation:\n');
@@ -67,9 +67,9 @@ console.log('\n🧪 Testing valid alternatives:');
 
 // Try some definitely valid numbers
 const knownValidNumbers = [
-  '+1212555001', // NYC area but different pattern
-  '+14155552001', // SF area
-  '+4367612345678', // Austrian 676 prefix
+  '+12125551234', // Valid NYC test number
+  '+14155552001', // Valid SF test number
+  '+4367712345678', // Austrian mobile
   '+447700900123', // UK test range
 ];
 
