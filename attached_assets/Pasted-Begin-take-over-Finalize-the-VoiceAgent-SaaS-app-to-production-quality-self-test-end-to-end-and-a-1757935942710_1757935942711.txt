@@ -1,0 +1,52 @@
+Begin take over.
+Finalize the VoiceAgent SaaS app to production quality, self-test end-to-end, and auto-fix any failures. If additional capacity is helpful, spin up sub-agents to parallelize tasks (security review, tests, UI). Do not expose secrets. Report PASS/FAIL per item with short evidence (logs/JSON/screenshot links).
+Scope & Objectives
+Fix remaining Phone → Tenant mapping issues and complete billing, connectors, demo wizard, localization (German default), and enterprise security—then deliver a green test report and release notes.
+Must-Do Fixes & Enhancements
+Phone → Tenant Mapping (critical)
+Implement strict E.164 normalization (region aware, incl. AT) and persist normalized numbers.
+DB constraints: unique active number per tenant; prevent cross-tenant binding/misrouting.
+Utilities: IPv6-safe key generation already in place—re-verify.
+Update Twilio inbound routing to always resolve tenant by normalized number.
+Tests: happy path, cross-tenant negative, invalid number, re-assignment.
+Billing & Minutes
+Track voicebot minutes (media stream) and forwarding minutes (<Dial> segments) per tenant.
+Monthly aggregator: base package fee + max(0, used − free) × overage rate (separate rates for bot/forward).
+Admin ABRECHNUNGEN page: ensure all Select.Item values are non-empty (use "all" for clear); no runtime errors.
+Produce example invoice payload; Stripe still backend-only.
+Stripe
+Frontend uses only pk_ (check import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY), backend only sk_.
+Health check must use secret key; ensure no StripePermissionError.
+Webhooks: raw body for signature; tests for success/failure events.
+ConnectorService & OAuth
+Wire Google Calendar (and stubs for HubSpot/Salesforce/Pipedrive).
+Security: CSRF/HMAC state, nonce persistence, provider binding validation, rate limits on OAuth routes, tenant scoping.
+Create event from flow action; verify appears in tenant calendar.
+Demo Tenant Wizard
+Steps: verify Twilio number → select STT/TTS (Google) → REQUIRED System Prompt → publish sample flow.
+No secret leakage; sandbox writes or isolated calendar.
+Flows & Runtime
+Per-tenant live flow loading; Redis session; barge-in; retries; human handoff.
+Enforce version transitions Draft→Staged→Live; single-live invariant.
+Localization
+Set German as default for the whole app (admin/customer UIs).
+Ensure admin “ABRECHNUNGEN” labels and messages are German; no mixed locales.
+Security & Ops
+WAF: block real exploit patterns but allow legitimate /admin assets.
+Rate limiting: per-tenant, per-phone, per-user; IPv6-safe metrics.
+Secrets encrypted; logs show only key prefixes; audit for flow publish, connector changes, phone mapping.
+Tests & Evidence (produce artifacts)
+Health: /api/health → { database:"operational", redis:"operational", stripe:"operational" }.
+Tenant isolation: 2 tenants (A/B). Cross-tenant access attempts → 403.
+Phone mapping: Twilio webhook simulation routes each number to the correct tenant + live flow.
+OAuth: calendar create via flow; show CSRF/nonce validation evidence.
+Billing: simulate calls (bot + transfer); aggregator output with free minutes deducted.
+UI: admin ABRECHNUNGEN loads without Select.Item error; filters work with "all".
+Stripe: no browser console errors; backend health green; webhook test passes.
+Localization: key screens in German by default.
+Deliverables
+PR(s) with migrations, code, and tests.
+Short test report (PASS/FAIL per item + links).
+Release notes + README/RUNBOOK updates.
+If something fails, auto-fix and re-run tests until PASS.
+Proceed now and report back with the final PASS report and artifact links.
