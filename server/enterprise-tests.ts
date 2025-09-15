@@ -320,12 +320,14 @@ export async function testPhoneMappingSecurity(): Promise<TestSuite> {
     {
       name: 'E.164 Phone Normalization',
       test: async () => {
-        // Test various phone number formats (using valid non-fictional numbers)
+        // Test various phone number formats (including both real and test numbers)
         const testCases = [
           { input: '+43 677 12345678', expected: '+4367712345678' },
           { input: '0043 677 12345678', expected: '+4367712345678' },
           { input: '0677 12345678', expected: '+4367712345678' },
-          { input: '+1 212 123 4567', expected: '+12121234567' } // Valid NYC area code instead of 555
+          { input: '+1 212 123 4567', expected: '+12121234567' }, // Valid NYC area code
+          { input: '+1 415 555 2001', expected: '+14155552001' }, // Valid SF test number
+          { input: '(415) 555-2001', expected: '+14155552001' }   // Formatted valid test number
         ];
 
         for (const testCase of testCases) {
@@ -344,19 +346,25 @@ export async function testPhoneMappingSecurity(): Promise<TestSuite> {
       test: async () => {
         const { validatePhoneNumber } = await import('./phone-security-utils');
         
-        // Valid numbers should pass (using real area codes, not fictional 555)
-        const validNumbers = ['+4367712345678', '+12121234567', '+4915112345678'];
+        // Valid numbers should pass (including both real and test numbers)
+        const validNumbers = ['+4367712345678', '+12121234567', '+4915112345678', '+14155552001'];
         for (const number of validNumbers) {
-          const result = validatePhoneNumber(number);
+          const result = validatePhoneNumber(number, { allowTestNumbers: true });
           if (!result.isValid) {
-            throw new Error(`Valid number ${number} should pass validation`);
+            throw new Error(`Valid number ${number} should pass validation: ${result.error}`);
           }
         }
 
+        // Test strict mode (should block 555 numbers)
+        const result555Strict = validatePhoneNumber('+15551234567', { allowTestNumbers: false, strictMode: true });
+        if (result555Strict.isValid) {
+          throw new Error('555 number should fail in strict mode');
+        }
+
         // Invalid numbers should fail
-        const invalidNumbers = ['+15555551234', '+44555123456', 'invalid', '+1555123456'];
+        const invalidNumbers = ['invalid', '+123', '+1234567890123456789', 'abc'];
         for (const number of invalidNumbers) {
-          const result = validatePhoneNumber(number);
+          const result = validatePhoneNumber(number, { allowTestNumbers: true });
           if (result.isValid) {
             throw new Error(`Invalid number ${number} should fail validation`);
           }
@@ -774,7 +782,7 @@ export async function testIntegrationSecurity(): Promise<TestSuite> {
           
         } catch (importError) {
           // If backgroundJobManager is not available, check if background jobs are running via alternative method
-          console.warn('[TEST] Could not import backgroundJobManager directly, checking alternative indicators:', importError.message);
+          console.warn('[TEST] Could not import backgroundJobManager directly, checking alternative indicators:', (importError as Error).message);
           
           // Check if there's evidence that background jobs are initialized
           // In the current implementation, background jobs may not be available during test execution

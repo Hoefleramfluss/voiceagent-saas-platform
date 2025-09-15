@@ -51,7 +51,7 @@ import {
   type InsertConnector
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sum, count, gte, lte, sql } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
@@ -953,8 +953,7 @@ export class DatabaseStorage implements IStorage {
           flowId: flowVersions.flowId,
           version: flowVersions.version,
           status: flowVersions.status,
-          content: flowVersions.content,
-          metadata: flowVersions.metadata,
+          flowJson: flowVersions.flowJson,
           publishedAt: flowVersions.publishedAt,
           publishedBy: flowVersions.publishedBy,
           createdAt: flowVersions.createdAt,
@@ -977,8 +976,7 @@ export class DatabaseStorage implements IStorage {
         flowId: flowVersions.flowId,
         version: flowVersions.version,
         status: flowVersions.status,
-        content: flowVersions.content,
-        metadata: flowVersions.metadata,
+        flowJson: flowVersions.flowJson,
         publishedAt: flowVersions.publishedAt,
         publishedBy: flowVersions.publishedBy,
         createdAt: flowVersions.createdAt,
@@ -1002,8 +1000,7 @@ export class DatabaseStorage implements IStorage {
           flowId: flowVersions.flowId,
           version: flowVersions.version,
           status: flowVersions.status,
-          content: flowVersions.content,
-          metadata: flowVersions.metadata,
+          flowJson: flowVersions.flowJson,
           publishedAt: flowVersions.publishedAt,
           publishedBy: flowVersions.publishedBy,
           createdAt: flowVersions.createdAt,
@@ -1295,7 +1292,7 @@ export class DatabaseStorage implements IStorage {
       const forbiddenFields = ['id', 'phoneNumber', 'tenantId', 'createdAt'];
       for (const field of forbiddenFields) {
         if (field in updates) {
-          throw createError.badRequest(`Cannot update immutable field: ${field}`);
+          throw createError.validation(`Cannot update immutable field: ${field}`);
         }
       }
       
@@ -1422,7 +1419,7 @@ export class DatabaseStorage implements IStorage {
       const forbiddenFields = ['id', 'tenantId', 'type', 'provider', 'createdAt'];
       for (const field of forbiddenFields) {
         if (field in updates) {
-          throw createError.badRequest(`Cannot update immutable field: ${field}`);
+          throw createError.validation(`Cannot update immutable field: ${field}`);
         }
       }
       
@@ -1499,7 +1496,8 @@ export class DatabaseStorage implements IStorage {
     config: any;
   }[]> {
     const configs: any[] = [];
-    for (const config of this.connectorConfigs.values()) {
+    const values = Array.from(this.connectorConfigs.values());
+    for (const config of values) {
       if (config.tenantId === tenantId) {
         configs.push(config);
       }
@@ -1617,7 +1615,7 @@ export class DatabaseStorage implements IStorage {
         .select()
         .from(tenants)
         .where(and(
-          eq(tenants.subscriptionStatus, 'trial'),
+          eq(tenants.status, 'trial'),
           lte(tenants.createdAt, cutoffDate)
         ));
       
@@ -1671,8 +1669,8 @@ export class DatabaseStorage implements IStorage {
         .leftJoin(tenants, eq(phoneNumberMappings.tenantId, tenants.id))
         .leftJoin(bots, eq(phoneNumberMappings.botId, bots.id))
         .where(and(
-          eq(tenants.id, null), // tenant doesn't exist
-          eq(bots.id, null)     // or bot doesn't exist
+          sql`${tenants.id} IS NULL`, // tenant doesn't exist
+          sql`${bots.id} IS NULL`     // or bot doesn't exist
         ));
       
       if (orphanedMappings.length === 0) {
