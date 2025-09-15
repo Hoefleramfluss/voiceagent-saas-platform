@@ -532,6 +532,31 @@ export const insertPhoneNumberMappingSchema = createInsertSchema(phoneNumberMapp
   id: true,
   createdAt: true,
   updatedAt: true
+}).refine(data => {
+  // SECURITY: Validate phone number format before normalization
+  if (!data.phoneNumber) {
+    return false;
+  }
+  const digitsOnly = data.phoneNumber.replace(/\D/g, '');
+  return digitsOnly.length >= 10 && digitsOnly.length <= 15;
+}, {
+  message: "Phone number must be between 10 and 15 digits",
+  path: ["phoneNumber"]
+}).refine(data => {
+  // SECURITY: Phone number can only contain valid characters
+  if (!data.phoneNumber) {
+    return false;
+  }
+  return /^[\+\-\s\(\)\d]+$/.test(data.phoneNumber);
+}, {
+  message: "Phone number contains invalid characters",
+  path: ["phoneNumber"]
+}).refine(data => {
+  // SECURITY: tenantId is required for proper isolation
+  return !!data.tenantId;
+}, {
+  message: "Tenant ID is required for phone number mapping",
+  path: ["tenantId"]
 });
 
 // Types
