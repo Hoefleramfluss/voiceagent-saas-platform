@@ -11,6 +11,7 @@ import {
   auditLogs,
   subscriptionPlans,
   invoiceJobs,
+  tenantSettings,
   type Tenant,
   type User, 
   type InsertUser, 
@@ -31,7 +32,8 @@ import {
   type InsertAuditLog,
   type SubscriptionPlan,
   type InvoiceJob,
-  type InsertInvoiceJob
+  type InsertInvoiceJob,
+  type TenantSettings
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -56,6 +58,8 @@ export interface IStorage {
   // Tenant operations
   getTenants(): Promise<Tenant[]>;
   getTenant(id: string): Promise<Tenant | undefined>;
+  getTenantBySubdomain(subdomain: string): Promise<Tenant | undefined>;
+  getTenantSettings(tenantId: string): Promise<TenantSettings | undefined>;
   createTenant(tenant: InsertTenant): Promise<Tenant>;
   updateTenant(id: string, updates: Partial<Tenant>): Promise<Tenant>;
   getTenantUsers(tenantId: string): Promise<User[]>;
@@ -213,6 +217,17 @@ export class DatabaseStorage implements IStorage {
   async getTenant(id: string): Promise<Tenant | undefined> {
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, id));
     return tenant || undefined;
+  }
+
+  async getTenantBySubdomain(subdomain: string): Promise<Tenant | undefined> {
+    // For now, try to match by tenant name (could be enhanced with dedicated subdomain field)
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.name, subdomain));
+    return tenant || undefined;
+  }
+
+  async getTenantSettings(tenantId: string): Promise<TenantSettings | undefined> {
+    const [settings] = await db.select().from(tenantSettings).where(eq(tenantSettings.tenantId, tenantId));
+    return settings || undefined;
   }
 
   async createTenant(insertTenant: InsertTenant): Promise<Tenant> {
