@@ -4,7 +4,7 @@ import Stripe from "stripe";
 import { setupAuth, requireAuth, requireRole, requireTenantAccess } from "./auth";
 import { hashPassword } from "./auth";
 import { storage } from "./storage";
-import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema } from "@shared/schema";
+import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema, insertPhoneNumberMappingSchema, updatePhoneNumberMappingSchema } from "@shared/schema";
 import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
 import { keyLoader, getStripeKey, getStripeWebhookSecret, invalidateKeyCache } from "./key-loader";
@@ -31,6 +31,7 @@ import {
   oauthAuthorizationRateLimit,
   oauthCallbackRateLimit
 } from "./security-controls";
+import { normalizePhoneNumber, validateBotOwnership } from "./phone-security-utils";
 import crypto from "crypto";
 
 // Stripe instance - will be initialized dynamically when needed
@@ -1159,6 +1160,248 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Package deprecated successfully" });
     } catch (error) {
       console.error('[Admin] Delete package error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Phone Mapping CRUD API - Platform Admin Only
+  app.get("/api/admin/phone-mappings", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { tenantId, limit = 50, offset = 0 } = req.query;
+      const pageSize = parseInt(limit as string);
+      const startIndex = parseInt(offset as string);
+      
+      // If tenantId is provided, get mappings for specific tenant, otherwise get all
+      if (tenantId) {
+        // Validate tenant exists
+        const tenant = await storage.getTenant(tenantId as string);
+        if (!tenant) {
+          return res.status(404).json({ message: "Tenant not found" });
+        }
+        
+        const allMappings = await storage.getPhoneNumberMappings(tenantId as string);
+        
+        // Add tenant name annotation and apply pagination
+        const mappingsWithTenantInfo = allMappings.map(mapping => ({
+          ...mapping,
+          tenantName: tenant.name
+        }));
+        
+        const paginatedMappings = mappingsWithTenantInfo.slice(startIndex, startIndex + pageSize);
+        
+        // FIXED: Consistent response format with pagination
+        res.json({
+          mappings: paginatedMappings,
+          total: allMappings.length,
+          limit: pageSize,
+          offset: startIndex
+        });
+      } else {
+        // Get all phone mappings with tenant info (admin view)
+        const allTenants = await storage.getTenants();
+        const mappingsWithTenantInfo = [];
+        
+        for (const tenant of allTenants) {
+          const mappings = await storage.getPhoneNumberMappings(tenant.id);
+          for (const mapping of mappings) {
+            mappingsWithTenantInfo.push({
+              ...mapping,
+              tenantName: tenant.name
+            });
+          }
+        }
+        
+        // Apply pagination
+        const paginatedMappings = mappingsWithTenantInfo.slice(startIndex, startIndex + pageSize);
+        
+        res.json({
+          mappings: paginatedMappings,
+          total: mappingsWithTenantInfo.length,
+          limit: pageSize,
+          offset: startIndex
+        });
+      }
+    } catch (error) {
+      console.error('[Admin] Get phone mappings error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/admin/phone-mappings", requireAuth, requireRole(['platform_admin']), auditSensitiveOperation('CREATE_PHONE_MAPPING'), async (req, res) => {
+    try {
+      // FIXED: Use shared validation schema from insertPhoneNumberMappingSchema
+      
+      const validation = insertPhoneNumberMappingSchema.safeParse(req.body);
+
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const data = validation.data;
+
+      // SECURITY: Normalize phone number to E.164 format
+      let normalizedPhone: string;
+      try {
+        normalizedPhone = normalizePhoneNumber(data.phoneNumber);
+      } catch (error) {
+        return res.status(400).json({ 
+          message: "Invalid phone number format",
+          details: error instanceof Error ? error.message : "Phone normalization failed"
+        });
+      }
+
+      // SECURITY: Validate tenant exists
+      const tenant = await storage.getTenant(data.tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+
+      // SECURITY: Validate bot ownership if botId is provided
+      if (data.botId) {
+        try {
+          await validateBotOwnership(data.botId, data.tenantId);
+        } catch (error) {
+          return res.status(403).json({ 
+            message: "Bot does not belong to this tenant or does not exist" 
+          });
+        }
+      }
+
+      // Check for existing active mapping with same phone number
+      const existingMapping = await storage.getPhoneNumberMappingByPhone(normalizedPhone);
+      if (existingMapping && existingMapping.isActive) {
+        return res.status(409).json({ 
+          message: "Phone number already has an active mapping",
+          existingMapping: {
+            id: existingMapping.id,
+            tenantId: existingMapping.tenantId,
+            phoneNumber: existingMapping.phoneNumber
+          }
+        });
+      }
+
+      // Create the mapping with normalized phone number
+      const mapping = await storage.createPhoneNumberMapping({
+        ...data,
+        phoneNumber: normalizedPhone
+      });
+
+      res.status(201).json(mapping);
+    } catch (error) {
+      console.error('[Admin] Create phone mapping error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.patch("/api/admin/phone-mappings/:id", requireAuth, requireRole(['platform_admin']), auditSensitiveOperation('UPDATE_PHONE_MAPPING'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // FIXED: Use shared validation schema for partial updates
+      const validation = updatePhoneNumberMappingSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const updates = validation.data;
+
+      // First, get the existing mapping to validate tenant access and get current tenantId
+      // We need to try different tenants since we don't know which tenant this mapping belongs to
+      const allTenants = await storage.getTenants();
+      let existingMapping = null;
+      let tenantId = null;
+
+      for (const tenant of allTenants) {
+        const mapping = await storage.getPhoneNumberMapping(id, tenant.id);
+        if (mapping) {
+          existingMapping = mapping;
+          tenantId = tenant.id;
+          break;
+        }
+      }
+
+      if (!existingMapping || !tenantId) {
+        return res.status(404).json({ message: "Phone mapping not found" });
+      }
+
+      // Process phone number normalization if provided
+      if (updates.phoneNumber) {
+        try {
+          updates.phoneNumber = normalizePhoneNumber(updates.phoneNumber);
+          
+          // Check for conflicts with other active mappings
+          const existingWithPhone = await storage.getPhoneNumberMappingByPhone(updates.phoneNumber);
+          if (existingWithPhone && existingWithPhone.id !== id && existingWithPhone.isActive) {
+            return res.status(409).json({ 
+              message: "Phone number already has an active mapping",
+              conflictingMapping: {
+                id: existingWithPhone.id,
+                tenantId: existingWithPhone.tenantId
+              }
+            });
+          }
+        } catch (error) {
+          return res.status(400).json({ 
+            message: "Invalid phone number format",
+            details: error instanceof Error ? error.message : "Phone normalization failed"
+          });
+        }
+      }
+
+      // SECURITY: Validate bot ownership if botId is being changed
+      if (updates.botId) {
+        try {
+          await validateBotOwnership(updates.botId, tenantId);
+        } catch (error) {
+          return res.status(403).json({ 
+            message: "Bot does not belong to this tenant or does not exist" 
+          });
+        }
+      }
+
+      // Update the mapping
+      const updatedMapping = await storage.updatePhoneNumberMapping(id, tenantId, updates);
+      res.json(updatedMapping);
+    } catch (error) {
+      console.error('[Admin] Update phone mapping error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/admin/phone-mappings/:id", requireAuth, requireRole(['platform_admin']), auditSensitiveOperation('DELETE_PHONE_MAPPING'), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Find the mapping across all tenants to ensure we can delete it
+      const allTenants = await storage.getTenants();
+      let foundMapping = false;
+      let tenantId = null;
+
+      for (const tenant of allTenants) {
+        const mapping = await storage.getPhoneNumberMapping(id, tenant.id);
+        if (mapping) {
+          foundMapping = true;
+          tenantId = tenant.id;
+          break;
+        }
+      }
+
+      if (!foundMapping || !tenantId) {
+        return res.status(404).json({ message: "Phone mapping not found" });
+      }
+
+      // Delete the mapping
+      await storage.deletePhoneNumberMapping(id, tenantId);
+      
+      res.json({ message: "Phone mapping deleted successfully" });
+    } catch (error) {
+      console.error('[Admin] Delete phone mapping error:', error);
       res.status(500).json({ message: (error as Error).message });
     }
   });

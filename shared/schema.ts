@@ -9,7 +9,8 @@ import {
   boolean, 
   pgEnum,
   jsonb,
-  uuid
+  uuid,
+  uniqueIndex
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -285,14 +286,18 @@ export const tenantSecrets = pgTable("tenant_secrets", {
 // Phone number mappings table
 export const phoneNumberMappings = pgTable("phone_number_mappings", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  phoneNumber: varchar("phone_number", { length: 50 }).notNull().unique(),
+  phoneNumber: varchar("phone_number", { length: 50 }).notNull(),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
   botId: uuid("bot_id").references(() => bots.id),
   webhookUrl: varchar("webhook_url", { length: 500 }),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull()
-});
+}, (table) => ({
+  // CRITICAL SECURITY: Partial unique index - only one active mapping per phone number
+  // This prevents phone number hijacking while allowing inactive mappings for history
+  activePhoneUniqueIdx: uniqueIndex('active_phone_unique_idx').on(table.phoneNumber).where(sql`${table.isActive} = true`)
+}));
 
 // Demo verification codes table (for persistent SMS verification)
 export const demoVerificationCodes = pgTable("demo_verification_codes", {
@@ -580,6 +585,27 @@ export const insertPhoneNumberMappingSchema = createInsertSchema(phoneNumberMapp
   path: ["tenantId"]
 });
 
+// Update schema for phone number mappings (partial updates)
+export const updatePhoneNumberMappingSchema = z.object({
+  phoneNumber: z.string().min(1, "Phone number is required").optional()
+    .refine(value => {
+      if (!value) return true; // Allow undefined for optional fields
+      const digitsOnly = value.replace(/\D/g, '');
+      return digitsOnly.length >= 10 && digitsOnly.length <= 15;
+    }, {
+      message: "Phone number must be between 10 and 15 digits"
+    })
+    .refine(value => {
+      if (!value) return true; // Allow undefined for optional fields
+      return /^[\+\-\s\(\)\d]+$/.test(value);
+    }, {
+      message: "Phone number contains invalid characters"
+    }),
+  botId: z.string().uuid("Valid bot ID required").optional().nullable(),
+  webhookUrl: z.string().url("Valid URL required").optional().nullable(),
+  isActive: z.boolean().optional()
+});
+
 export const insertDemoVerificationCodeSchema = createInsertSchema(demoVerificationCodes).omit({
   id: true,
   createdAt: true,
@@ -622,5 +648,6 @@ export type TenantSecret = typeof tenantSecrets.$inferSelect;
 export type InsertTenantSecret = z.infer<typeof insertTenantSecretSchema>;
 export type PhoneNumberMapping = typeof phoneNumberMappings.$inferSelect;
 export type InsertPhoneNumberMapping = z.infer<typeof insertPhoneNumberMappingSchema>;
+export type UpdatePhoneNumberMapping = z.infer<typeof updatePhoneNumberMappingSchema>;
 export type DemoVerificationCode = typeof demoVerificationCodes.$inferSelect;
 export type InsertDemoVerificationCode = z.infer<typeof insertDemoVerificationCodeSchema>;
