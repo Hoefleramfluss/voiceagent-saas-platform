@@ -13,6 +13,8 @@ import { enhancedBillingCalculator } from "./enhanced-billing-calculator";
 import { stripeInvoiceService } from "./stripe-invoice-service";
 import { stripeWebhookService } from "./stripe-webhook-service";
 import { automatedInvoiceService } from "./automated-invoice-service";
+import { getSystemHealth, ErrorMonitor } from "./error-handling";
+import { getResilienceHealth } from "./retry-utils";
 import { 
   apiKeyRateLimit, 
   criticalKeyOperationsRateLimit, 
@@ -109,6 +111,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       res.status(503).json({ status: "unhealthy", error: (error as Error).message });
+    }
+  });
+
+  // Enhanced system health check with error monitoring (Admin only)
+  app.get("/api/health/detailed", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const systemHealth = getSystemHealth();
+      const resilienceHealth = getResilienceHealth();
+      
+      // Get additional system metrics
+      const memoryUsage = process.memoryUsage();
+      const uptime = process.uptime();
+      
+      res.json({
+        ...systemHealth,
+        resilience: resilienceHealth,
+        system: {
+          uptime: Math.floor(uptime),
+          memory: {
+            rss: Math.floor(memoryUsage.rss / 1024 / 1024) + 'MB',
+            heapTotal: Math.floor(memoryUsage.heapTotal / 1024 / 1024) + 'MB',
+            heapUsed: Math.floor(memoryUsage.heapUsed / 1024 / 1024) + 'MB',
+            external: Math.floor(memoryUsage.external / 1024 / 1024) + 'MB'
+          },
+          nodeVersion: process.version,
+          pid: process.pid
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Error monitoring endpoint (Admin only)
+  app.get("/api/monitoring/errors", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const errorStats = ErrorMonitor.getErrorStats();
+      res.json(errorStats);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Circuit breaker status endpoint (Admin only)
+  app.get("/api/monitoring/circuit-breakers", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const resilienceHealth = getResilienceHealth();
+      res.json(resilienceHealth);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
