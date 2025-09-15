@@ -414,6 +414,147 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin tenant management endpoints (aliases for admin UI consistency)
+  app.get("/api/admin/tenants", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const tenants = await storage.getTenants();
+      res.json(tenants);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/admin/tenants", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = insertTenantSchema.extend({
+        email: z.string().email("Valid email address required")
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      let stripeCustomerId: string | undefined;
+      
+      // Create Stripe customer with idempotency - now properly checks if Stripe is available
+      const stripeInstance = await getStripe();
+      if (stripeInstance) {
+        try {
+          // Generate idempotency key for customer creation
+          const customerIdempotencyKey = crypto.createHash('sha256')
+            .update(`customer:${validation.data.name}:${validation.data.email}`)
+            .digest('hex').substring(0, 32);
+
+          const stripeCustomer = await stripeInstance.customers.create({
+            name: validation.data.name,
+            email: validation.data.email,
+            description: `Customer for tenant: ${validation.data.name}`,
+            metadata: {
+              tenant_name: validation.data.name,
+              created_by: req.user?.id || 'unknown'
+            }
+          }, {
+            idempotencyKey: customerIdempotencyKey
+          });
+          stripeCustomerId = stripeCustomer.id;
+          console.log(`[Stripe] Created customer ${stripeCustomerId} for tenant ${validation.data.name}`);
+        } catch (stripeError) {
+          console.error('[Stripe] Failed to create customer:', stripeError);
+          return res.status(500).json({ 
+            message: "Failed to create Stripe customer. Please check Stripe configuration.",
+            error: (stripeError as Error).message
+          });
+        }
+      } else {
+        return res.status(503).json({ 
+          message: "Stripe not configured. Please add Stripe API keys in admin settings." 
+        });
+      }
+
+      // Create tenant with Stripe customer ID
+      const tenant = await storage.createTenant({
+        ...validation.data,
+        stripeCustomerId
+      });
+
+      // Create billing account record
+      if (stripeCustomerId) {
+        try {
+          await storage.createBillingAccount({
+            tenantId: tenant.id,
+            stripeCustomerId: stripeCustomerId
+          });
+        } catch (billingError) {
+          console.warn('[Billing] Failed to create billing account:', billingError);
+          // Continue - tenant is created, billing account can be created later
+        }
+      }
+
+      res.status(201).json(tenant);
+    } catch (error) {
+      console.error('[Tenant Creation] Error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/admin/tenants/:tenantId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const tenant = await storage.getTenant(req.params.tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+      res.json(tenant);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.put("/api/admin/tenants/:tenantId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = insertTenantSchema.partial().safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const tenant = await storage.updateTenant(req.params.tenantId, validation.data);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+      
+      res.json(tenant);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/admin/tenants/:tenantId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      await storage.deleteTenant(req.params.tenantId);
+      res.json({ message: "Tenant deleted successfully" });
+    } catch (error) {
+      if ((error as Error).message.includes('not found') || (error as Error).message.includes('Not found')) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/admin/tenants/:tenantId/users", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const users = await storage.getTenantUsers(req.params.tenantId);
+      res.json(users);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // Bot management
   app.get("/api/bots", requireAuth, async (req, res) => {
     try {
@@ -2480,9 +2621,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
           );
         }
-        const tenantId = phoneMapping.tenantId as string; // Already null-checked above
-        bot = await storage.getBot(phoneMapping.botId, tenantId);
-        tenant = await storage.getTenant(tenantId);
+        const tenantId = phoneMapping.tenantId;
+        if (!tenantId) {
+          console.error('[TwilioWebhook] Phone mapping missing tenantId:', phoneMapping);
+          return res.status(500).set('Content-Type', 'text/xml').send(
+            '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
+          );
+        }
+        bot = await storage.getBot(phoneMapping.botId, tenantId!);
+        tenant = await storage.getTenant(tenantId!);
         
         if (!bot || !tenant) {
           console.error('[TwilioWebhook] Bot or tenant not found:', { botId: phoneMapping.botId, tenantId: phoneMapping.tenantId });
@@ -2598,9 +2745,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               console.warn('[TwilioWebhook] Phone mapping missing tenantId for status update');
               // Continue without bot/tenant context
             } else {
-              const tenantId = phoneMapping.tenantId as string; // Already null-checked above
-              bot = await storage.getBot(phoneMapping.botId, tenantId);
-              tenant = await storage.getTenant(tenantId);
+              const tenantId = phoneMapping.tenantId;
+              if (tenantId) {
+                bot = await storage.getBot(phoneMapping.botId, tenantId!);
+                tenant = await storage.getTenant(tenantId!);
+              }
             }
           }
         } catch (error) {
