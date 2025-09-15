@@ -79,9 +79,11 @@ export interface IStorage {
   createTenant(tenant: InsertTenant): Promise<Tenant>;
   updateTenant(id: string, updates: Partial<Tenant>): Promise<Tenant>;
   getTenantUsers(tenantId: string): Promise<User[]>;
+  getUsersByTenantId(tenantId: string): Promise<User[]>; // Alias for getTenantUsers
 
   // Bot operations
   getBots(tenantId: string): Promise<Bot[]>;
+  getBotsByTenantId(tenantId: string): Promise<Bot[]>; // Alias for getBots
   getBot(id: string, tenantId?: string): Promise<Bot | undefined>;
   createBot(bot: InsertBot): Promise<Bot>;
   updateBot(id: string, updates: Partial<Bot>): Promise<Bot>;
@@ -182,6 +184,7 @@ export interface IStorage {
 
   // Flow operations
   getFlows(tenantId: string): Promise<Flow[]>;
+  getFlowsByTenantId(tenantId: string): Promise<Flow[]>; // Alias for getFlows
   getFlow(id: string, tenantId: string): Promise<Flow | undefined>;
   createFlow(flow: InsertFlow): Promise<Flow>;
   updateFlow(id: string, tenantId: string, updates: Partial<Flow>): Promise<Flow>;
@@ -200,9 +203,12 @@ export interface IStorage {
   getPhoneNumberMappings(tenantId: string): Promise<PhoneNumberMapping[]>;
   getPhoneNumberMapping(id: string, tenantId: string): Promise<PhoneNumberMapping | undefined>;
   getPhoneNumberMappingByPhone(phoneNumber: string): Promise<PhoneNumberMapping | undefined>;
+  getPhoneMappingByNumber(phoneNumber: string): Promise<PhoneNumberMapping | undefined>; // Alias for getPhoneNumberMappingByPhone
   createPhoneNumberMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping>;
+  createPhoneMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping>; // Alias for createPhoneNumberMapping
   updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping>;
   deletePhoneNumberMapping(id: string, tenantId: string): Promise<void>;
+  removePhoneMapping(phoneNumber: string): Promise<void>; // Simplified remove by phone number
 
   // Demo verification code operations
   createVerificationCode(verificationCode: InsertDemoVerificationCode): Promise<DemoVerificationCode>;
@@ -218,6 +224,28 @@ export interface IStorage {
   createConnector(connector: InsertConnector): Promise<Connector>;
   updateConnector(id: string, tenantId: string, updates: Partial<Connector>): Promise<Connector>;
   deleteConnector(id: string, tenantId: string): Promise<void>;
+  
+  // Connector configuration operations (for enterprise tests)
+  createConnectorConfig(config: {
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }): Promise<{
+    id: string;
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }>;
+  getConnectorConfigsByTenantId(tenantId: string): Promise<{
+    id: string;
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }[]>;
+  deleteConnectorConfig(id: string): Promise<void>;
 
   // System and maintenance operations
   executeRaw(query: string): Promise<{ rowCount: number }>;
@@ -327,8 +355,18 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(users).where(eq(users.tenantId, tenantId));
   }
 
+  // Alias for getTenantUsers (for enterprise tests)
+  async getUsersByTenantId(tenantId: string): Promise<User[]> {
+    return this.getTenantUsers(tenantId);
+  }
+
   async getBots(tenantId: string): Promise<Bot[]> {
     return await db.select().from(bots).where(eq(bots.tenantId, tenantId));
+  }
+
+  // Alias for getBots (for enterprise tests)
+  async getBotsByTenantId(tenantId: string): Promise<Bot[]> {
+    return this.getBots(tenantId);
   }
 
   async getBot(id: string, tenantId?: string): Promise<Bot | undefined> {
@@ -818,6 +856,11 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(flows.createdAt));
   }
 
+  // Alias for getFlows (for enterprise tests)
+  async getFlowsByTenantId(tenantId: string): Promise<Flow[]> {
+    return this.getFlows(tenantId);
+  }
+
   async getFlow(id: string, tenantId: string): Promise<Flow | undefined> {
     // Security: Always require tenant context to prevent cross-tenant access
     const [flow] = await db.select()
@@ -1197,6 +1240,11 @@ export class DatabaseStorage implements IStorage {
     }, 'getPhoneNumberMappingByPhone');
   }
 
+  // Alias for getPhoneNumberMappingByPhone (for enterprise tests)
+  async getPhoneMappingByNumber(phoneNumber: string): Promise<PhoneNumberMapping | undefined> {
+    return this.getPhoneNumberMappingByPhone(phoneNumber);
+  }
+
   async createPhoneNumberMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping> {
     return await withDatabaseRetry(async () => {
       // SECURITY: Validate phone number format
@@ -1224,6 +1272,11 @@ export class DatabaseStorage implements IStorage {
       
       return newMapping;
     }, 'createPhoneNumberMapping');
+  }
+
+  // Alias for createPhoneNumberMapping (for enterprise tests)
+  async createPhoneMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping> {
+    return this.createPhoneNumberMapping(mapping);
   }
 
   async updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping> {
@@ -1282,6 +1335,23 @@ export class DatabaseStorage implements IStorage {
         throw createError.notFound('Phone number mapping not found or access denied');
       }
     }, 'deletePhoneNumberMapping');
+  }
+
+  // Remove phone mapping by phone number (for enterprise tests)
+  async removePhoneMapping(phoneNumber: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      // SECURITY: Normalize phone number to E.164 for consistent lookup
+      const normalizedPhone = normalizePhoneNumber(phoneNumber);
+      
+      const result = await db
+        .delete(phoneNumberMappings)
+        .where(eq(phoneNumberMappings.phoneNumber, normalizedPhone))
+        .returning();
+      
+      if (result.length === 0) {
+        throw createError.notFound('Phone number mapping not found');
+      }
+    }, 'removePhoneMapping');
   }
 
   // Connector operations
@@ -1387,6 +1457,61 @@ export class DatabaseStorage implements IStorage {
         throw createError.notFound('Connector not found or access denied');
       }
     }, 'deleteConnector');
+  }
+
+  // Connector configuration operations (for enterprise tests)
+  // These simulate connector configurations used in enterprise testing
+  private connectorConfigs: Map<string, {
+    id: string;
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }> = new Map();
+  
+  async createConnectorConfig(config: {
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }): Promise<{
+    id: string;
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }> {
+    const id = `connector-config-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const connectorConfig = {
+      id,
+      ...config
+    };
+    
+    this.connectorConfigs.set(id, connectorConfig);
+    return connectorConfig;
+  }
+  
+  async getConnectorConfigsByTenantId(tenantId: string): Promise<{
+    id: string;
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }[]> {
+    const configs: any[] = [];
+    for (const config of this.connectorConfigs.values()) {
+      if (config.tenantId === tenantId) {
+        configs.push(config);
+      }
+    }
+    return configs;
+  }
+  
+  async deleteConnectorConfig(id: string): Promise<void> {
+    if (!this.connectorConfigs.has(id)) {
+      throw createError.notFound('Connector config not found');
+    }
+    this.connectorConfigs.delete(id);
   }
   // Demo verification code operations
   async createVerificationCode(verificationCode: InsertDemoVerificationCode): Promise<DemoVerificationCode> {

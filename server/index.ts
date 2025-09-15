@@ -157,15 +157,17 @@ app.use((req, res, next) => {
       automatedInvoiceService.startScheduler();
       console.log(`[STARTUP] 📅 Automated invoice scheduler initialized`);
       
-      // Initialize enterprise background jobs
-      try {
-        const { initializeBackgroundJobs } = await import('./background-jobs');
-        initializeBackgroundJobs();
-        console.log(`[STARTUP] 📋 Enterprise background jobs initialized`);
-      } catch (bgJobError) {
-        console.error(`[STARTUP] ⚠️ Background jobs initialization failed:`, bgJobError);
-        // Don't exit - continue without background jobs in case of error
-      }
+      // Initialize enterprise background jobs (async)
+      (async () => {
+        try {
+          const { initializeBackgroundJobs } = await import('./background-jobs');
+          initializeBackgroundJobs();
+          console.log(`[STARTUP] 📋 Enterprise background jobs initialized`);
+        } catch (bgJobError) {
+          console.error(`[STARTUP] ⚠️ Background jobs initialization failed:`, bgJobError);
+          // Don't exit - continue without background jobs in case of error
+        }
+      })();
     });
     
     // Handle server errors

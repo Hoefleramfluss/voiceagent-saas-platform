@@ -6,7 +6,7 @@
  */
 
 import { db } from "./db";
-import { bots } from "@shared/schema";
+import { bots, phoneNumberMappings } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { createError } from "./error-handling";
 import { parsePhoneNumber, isValidPhoneNumber, CountryCode } from 'libphonenumber-js';
@@ -176,5 +176,106 @@ export function validatePhoneNumberFormat(phoneNumber: string): void {
   // Check for valid characters (only digits, spaces, parentheses, hyphens, plus)
   if (!/^[\+\-\s\(\)\d]+$/.test(phoneNumber)) {
     throw createError.validation('Phone number contains invalid characters');
+  }
+}
+
+/**
+ * Alias for normalizePhoneNumber to match enterprise test expectations
+ */
+export function normalizePhoneToE164(phoneNumber: string, defaultCountry?: string): string {
+  return normalizePhoneNumber(phoneNumber, defaultCountry);
+}
+
+/**
+ * Validate phone number and return validation result (for enterprise tests)
+ */
+export function validatePhoneNumber(phoneNumber: string): { isValid: boolean; error?: string } {
+  try {
+    validatePhoneNumberFormat(phoneNumber);
+    normalizePhoneNumber(phoneNumber);
+    return { isValid: true };
+  } catch (error) {
+    return {
+      isValid: false,
+      error: error instanceof Error ? error.message : 'Unknown validation error'
+    };
+  }
+}
+
+/**
+ * Security violation types for phone number checks
+ */
+export interface PhoneSecurityViolation {
+  hasViolations: boolean;
+  violations: string[];
+  details?: string;
+}
+
+/**
+ * Check for phone number security violations (cross-tenant access, etc.)
+ * CRITICAL SECURITY: Prevents cross-tenant bot binding and call misrouting
+ */
+export async function checkPhoneSecurityViolations(
+  phoneNumber: string,
+  requestedTenantId: string,
+  requestedBotId: string
+): Promise<PhoneSecurityViolation> {
+  const violations: string[] = [];
+  const details: string[] = [];
+  
+  try {
+    // Normalize phone number first
+    const normalizedPhone = normalizePhoneNumber(phoneNumber);
+    
+    // Check if phone number is already mapped to a different tenant
+    const [existingMapping] = await db
+      .select({
+        tenantId: phoneNumberMappings.tenantId,
+        botId: phoneNumberMappings.botId,
+        isActive: phoneNumberMappings.isActive
+      })
+      .from(phoneNumberMappings)
+      .where(and(
+        eq(phoneNumberMappings.phoneNumber, normalizedPhone),
+        eq(phoneNumberMappings.isActive, true)
+      ));
+    
+    if (existingMapping) {
+      // Check if trying to bind to different tenant
+      if (existingMapping.tenantId !== requestedTenantId) {
+        violations.push('CROSS_TENANT_PHONE_BINDING');
+        details.push(`Phone number ${normalizedPhone} is already bound to tenant ${existingMapping.tenantId}`);
+      }
+      
+      // Check if trying to bind to different bot within same tenant
+      if (existingMapping.tenantId === requestedTenantId && existingMapping.botId !== requestedBotId) {
+        violations.push('CROSS_TENANT_BOT_BINDING');
+        details.push(`Phone number ${normalizedPhone} is already bound to bot ${existingMapping.botId}`);
+      }
+    }
+    
+    // Validate that the requested bot actually belongs to the tenant
+    try {
+      await validateBotOwnership(requestedBotId, requestedTenantId);
+    } catch (error) {
+      violations.push('INVALID_BOT_OWNERSHIP');
+      details.push(`Bot ${requestedBotId} does not belong to tenant ${requestedTenantId}`);
+    }
+    
+    return {
+      hasViolations: violations.length > 0,
+      violations,
+      details: details.join('; ')
+    };
+    
+  } catch (error) {
+    violations.push('VALIDATION_ERROR');
+    details.push(`Phone validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    
+    return {
+      hasViolations: true,
+      violations,
+      details: details.join('; ')
+    };
   }
 }

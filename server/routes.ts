@@ -15,6 +15,7 @@ import { stripeWebhookService } from "./stripe-webhook-service";
 import { automatedInvoiceService } from "./automated-invoice-service";
 import { getSystemHealth, ErrorMonitor } from "./error-handling";
 import { getResilienceHealth } from "./retry-utils";
+import { runEnterpriseTestsEndpoint } from "./enterprise-tests";
 import { 
   apiKeyRateLimit, 
   criticalKeyOperationsRateLimit, 
@@ -113,6 +114,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAllowedIP,
     auditSensitiveOperation('RESET_SECURITY_METRICS'),
     resetSecurityMetrics
+  );
+  
+  // Enterprise Tests Endpoint (Admin Only)
+  app.post("/api/admin/security/tests", 
+    requireAuth, 
+    requireRole(['platform_admin']),
+    runEnterpriseTestsEndpoint
   );
 
   // Demo tenant setup endpoints (no auth required for demo)
