@@ -272,6 +272,38 @@ export const enterpriseWebhookRateLimit = rateLimit({
 });
 
 /**
+ * Enterprise Twilio Webhook Rate Limiting
+ * CRITICAL SECURITY: Uses actual Twilio webhook fields To/From for proper rate limiting
+ * Protects against phone number enumeration and webhook abuse attacks
+ */
+export const enterpriseTwilioWebhookRateLimit = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: process.env.NODE_ENV === 'production' ? 50 : 100, // Stricter for Twilio webhooks
+  message: {
+    error: 'Twilio webhook rate limit exceeded',
+    retryAfter: '5 minutes',
+    type: 'TWILIO_WEBHOOK_RATE_LIMIT'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: ExtendedRequest): string => {
+    // SECURITY: Use IPv6-safe IP key generator + Twilio fields for multi-dimensional limiting
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
+    
+    // Use actual Twilio webhook fields instead of contactPhone
+    const toNumber = req.body?.To || 'no-to';
+    const fromNumber = req.body?.From || 'no-from';
+    const callSid = req.body?.CallSid || 'no-sid';
+    
+    // Multi-dimensional key: IP + phone numbers + call identifier
+    return `twilio:${ipKey}:to:${toNumber}:from:${fromNumber}:${callSid.slice(-8)}`;
+  },
+  handler: createEnterpriseHandler('twilio-webhook', ['ip', 'phone']),
+  skipSuccessfulRequests: false, // Count all Twilio requests for security
+  skipFailedRequests: false
+});
+
+/**
  * Enterprise Admin Operations Rate Limiting
  * Per-tenant and per-user protection for administrative actions
  */
