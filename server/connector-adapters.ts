@@ -3,8 +3,9 @@
  * Provides unified interfaces for external service integrations
  */
 
-// Base configuration interface for all connectors
+// Base configuration interface for all connectors with tenant context
 export interface BaseConnectorConfig {
+  tenantId: string; // CRITICAL: Every connector config must have tenant context
   apiKey?: string;
   accessToken?: string;
   refreshToken?: string;
@@ -59,13 +60,16 @@ export interface Deal {
   updatedAt?: Date;
 }
 
-// Base adapter interface
+// Base adapter interface with tenant context
 export interface BaseConnectorAdapter {
   type: 'crm' | 'calendar';
   provider: string;
+  tenantId: string; // CRITICAL: Enforce tenant context
   isConnected(): Promise<boolean>;
   testConnection(): Promise<{ success: boolean; error?: string }>;
   disconnect(): Promise<void>;
+  // Tenant validation method
+  validateTenantContext(requestTenantId: string): boolean;
 }
 
 // CRM adapter interface

@@ -46,8 +46,14 @@ interface SalesforceConfig extends BaseConnectorConfig {
 export class GoogleCalendarAdapter implements CalendarAdapter {
   type: 'calendar' = 'calendar';
   provider = 'google_calendar';
+  tenantId: string;
   
-  constructor(private config: GoogleCalendarConfig) {}
+  constructor(private config: GoogleCalendarConfig) {
+    if (!config.tenantId) {
+      throw new Error('GoogleCalendarAdapter requires tenantId for security');
+    }
+    this.tenantId = config.tenantId;
+  }
   
   async isConnected(): Promise<boolean> {
     try {
@@ -58,8 +64,17 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
     }
   }
   
+  validateTenantContext(requestTenantId: string): boolean {
+    return this.tenantId === requestTenantId;
+  }
+
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
+      // SECURITY: Validate tenant context is properly set
+      if (!this.tenantId) {
+        return { success: false, error: 'No tenant context - security violation' };
+      }
+      
       // Basic test - attempt to fetch calendar info
       // This would make an actual API call in production
       if (!this.config.accessToken) {
@@ -83,6 +98,11 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
   
   async getEvents(startDate: Date, endDate: Date): Promise<CalendarEvent[]> {
     try {
+      // SECURITY: Validate tenant context before API operations
+      if (!this.tenantId) {
+        throw new ConnectorError('No tenant context - access denied', 'SECURITY_ERROR', this.provider);
+      }
+      
       // Mock implementation - would make actual Google Calendar API call
       return [
         {

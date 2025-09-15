@@ -587,6 +587,7 @@ export async function testConnectorAccessSecurity(): Promise<TestSuite> {
         
         try {
           const mockConfig = {
+            tenantId: testTenant.id, // CRITICAL: Include tenant context
             clientId: 'test-client-id',
             clientSecret: 'test-client-secret',
             accessToken: 'test-access-token',
@@ -597,6 +598,11 @@ export async function testConnectorAccessSecurity(): Promise<TestSuite> {
           // Import an actual CalendarAdapter implementation for testing
           const { GoogleCalendarAdapter } = await import('./connector-implementations');
           const adapter = new GoogleCalendarAdapter(mockConfig);
+          
+          // SECURITY TEST: Verify tenant context validation
+          if (!adapter.validateTenantContext(testTenant.id)) {
+            throw new Error('Connector adapter should have tenant context');
+          }
           
           // Test connection
           const connectionResult = await adapter.testConnection();
