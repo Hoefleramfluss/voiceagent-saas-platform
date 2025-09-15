@@ -100,7 +100,7 @@ export function enterpriseKeyGenerator(dimensions: Array<'ip' | 'tenant' | 'phon
     
     if (dimensions.includes('ip')) {
       // SECURITY: Use IPv6-safe IP key generator for proper rate limiting
-      const ipKey = ipKeyGenerator(req);
+      const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
       keyParts.push(`ip:${ipKey}`);
     }
     
@@ -183,7 +183,7 @@ export const enterpriseDemoRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
     // SECURITY: Use IPv6-safe IP key generator + phone for multi-dimensional limiting
-    const ipKey = ipKeyGenerator(req);
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
     const phone = req.body?.contactPhone || req.body?.phone || req.query?.phone || 'no-phone';
     return `ip:${ipKey}|phone:${phone}`;
   },
@@ -210,7 +210,7 @@ export const enterprisePhoneVerificationRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
     // SECURITY: Use IPv6-safe IP key generator + phone for multi-dimensional limiting
-    const ipKey = ipKeyGenerator(req);
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
     const phone = req.body?.contactPhone || req.body?.phone || req.query?.phone || 'no-phone';
     return `phone:${phone}|ip:${ipKey}`;
   },
@@ -236,7 +236,7 @@ export const enterpriseAuthRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
     // SECURITY: Use IPv6-safe IP key generator + tenant for multi-dimensional limiting
-    const ipKey = ipKeyGenerator(req);
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
     const tenantId = req.tenant?.id || req.user?.tenantId || 'no-tenant';
     return `ip:${ipKey}|tenant:${tenantId}`;
   },
@@ -261,7 +261,7 @@ export const enterpriseWebhookRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
     // SECURITY: Use IPv6-safe IP key generator for webhook rate limiting
-    const ipKey = ipKeyGenerator(req);
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
     const signature = req.headers['stripe-signature'] || req.headers['x-twilio-signature'] || '';
     const tenantId = req.tenant?.id || 'no-tenant';
     return `webhook:${ipKey}:${tenantId}:${signature.slice(0, 10)}`;
@@ -287,7 +287,7 @@ export const enterpriseAdminRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
     // SECURITY: Use IPv6-safe IP key generator + user for multi-dimensional limiting
-    const ipKey = ipKeyGenerator(req);
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
     const userId = req.user?.id || 'anonymous';
     return `user:${userId}|ip:${ipKey}`;
   },
@@ -314,7 +314,7 @@ export const enterpriseBillingRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
     // SECURITY: Use IPv6-safe IP key generator + tenant/user for multi-dimensional limiting
-    const ipKey = ipKeyGenerator(req);
+    const ipKey = ipKeyGenerator(req.ip || req.connection.remoteAddress || '127.0.0.1');
     const tenantId = req.tenant?.id || req.user?.tenantId || 'no-tenant';
     const userId = req.user?.id || 'anonymous';
     return `tenant:${tenantId}|user:${userId}|ip:${ipKey}`;
