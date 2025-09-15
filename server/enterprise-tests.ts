@@ -325,7 +325,7 @@ export async function testPhoneMappingSecurity(): Promise<TestSuite> {
           { input: '+43 677 12345678', expected: '+4367712345678' },
           { input: '0043 677 12345678', expected: '+4367712345678' },
           { input: '0677 12345678', expected: '+4367712345678' },
-          { input: '+1 212 123 4567', expected: '+12121234567' }, // Valid NYC area code
+          { input: '+1 212 555 1234', expected: '+12125551234' }, // Valid NYC phone number
           { input: '+1 415 555 2001', expected: '+14155552001' }, // Valid SF test number
           { input: '(415) 555-2001', expected: '+14155552001' }   // Formatted valid test number
         ];
@@ -347,7 +347,7 @@ export async function testPhoneMappingSecurity(): Promise<TestSuite> {
         const { validatePhoneNumber } = await import('./phone-security-utils');
         
         // Valid numbers should pass (including both real and test numbers)
-        const validNumbers = ['+4367712345678', '+12121234567', '+4915112345678', '+14155552001'];
+        const validNumbers = ['+4367712345678', '+12125551234', '+4915112345678', '+14155552001'];
         for (const number of validNumbers) {
           const result = validatePhoneNumber(number, { allowTestNumbers: true });
           if (!result.isValid) {
