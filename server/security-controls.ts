@@ -72,6 +72,44 @@ export const loginRateLimit = rateLimit({
 });
 
 /**
+ * Rate limiter for OAuth authorization requests
+ * Prevents abuse of OAuth initiation endpoints
+ */
+export const oauthAuthorizationRateLimit = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 10, // Limit each IP to 10 OAuth authorization requests per 10 minutes
+  message: {
+    error: 'Too many OAuth authorization requests from this IP, please try again later.',
+    retryAfter: '10 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: ExtendedRequest) => {
+    // Rate limit by IP + tenant for better isolation
+    return `oauth_auth:${req.ip}:${req.user?.tenantId || 'unknown'}`;
+  }
+});
+
+/**
+ * Rate limiter for OAuth callback processing
+ * Prevents callback endpoint abuse and replay attacks
+ */
+export const oauthCallbackRateLimit = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 15, // Allow multiple legitimate callback attempts
+  message: {
+    error: 'Too many OAuth callback requests from this IP, please try again later.',
+    retryAfter: '5 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: ExtendedRequest) => {
+    // Rate limit by IP + provider for isolation
+    return `oauth_callback:${req.ip}:${req.params?.provider || 'unknown'}`;
+  }
+});
+
+/**
  * Rate limiter for demo tenant creation endpoints
  * Prevents abuse and SMS bombing through demo setup
  */

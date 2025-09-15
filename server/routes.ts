@@ -27,7 +27,9 @@ import {
   validateOperationPermissions,
   demoTenantRateLimit,
   phoneVerificationRateLimit,
-  resendCodeRateLimit
+  resendCodeRateLimit,
+  oauthAuthorizationRateLimit,
+  oauthCallbackRateLimit
 } from "./security-controls";
 import crypto from "crypto";
 
@@ -1359,6 +1361,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: (error as Error).message });
     }
   });
+
+  // Connector OAuth Routes
+  const {
+    initiateOAuth,
+    handleOAuthCallback,
+    getConnectorConfigs,
+    testConnectorConnection,
+    disconnectConnector
+  } = await import('./connector-oauth-service');
+
+  // Get connector configurations (Customer Admin/User)
+  app.get("/api/connectors/config", 
+    requireAuth, 
+    requireRole(['customer_admin', 'customer_user']), 
+    getConnectorConfigs
+  );
+
+  // Initiate OAuth flow (Customer Admin only) - with rate limiting
+  app.get("/api/connectors/oauth/authorize/:provider", 
+    oauthAuthorizationRateLimit,
+    requireAuth, 
+    requireRole(['customer_admin']), 
+    initiateOAuth
+  );
+
+  // Handle OAuth callback (Public endpoint) - with rate limiting for security
+  app.get("/api/connectors/oauth/callback/:provider", 
+    oauthCallbackRateLimit, 
+    handleOAuthCallback
+  );
+
+  // Test connector connection (Customer Admin/User)
+  app.post("/api/connectors/test/:provider", 
+    requireAuth, 
+    requireRole(['customer_admin', 'customer_user']), 
+    testConnectorConnection
+  );
+
+  // Disconnect connector (Customer Admin only)
+  app.delete("/api/connectors/:provider", 
+    requireAuth, 
+    requireRole(['customer_admin']), 
+    disconnectConnector
+  );
 
   // Twilio webhooks (for incoming calls)
   app.post("/telephony/incoming", async (req, res) => {
