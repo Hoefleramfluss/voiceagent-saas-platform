@@ -43,6 +43,9 @@ import {
   phoneNumberMappings,
   type PhoneNumberMapping,
   type InsertPhoneNumberMapping,
+  demoVerificationCodes,
+  type DemoVerificationCode,
+  type InsertDemoVerificationCode,
   connectors,
   type Connector,
   type InsertConnector
@@ -200,6 +203,13 @@ export interface IStorage {
   createPhoneNumberMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping>;
   updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping>;
   deletePhoneNumberMapping(id: string, tenantId: string): Promise<void>;
+
+  // Demo verification code operations
+  createVerificationCode(verificationCode: InsertDemoVerificationCode): Promise<DemoVerificationCode>;
+  getVerificationCode(tenantId: string): Promise<DemoVerificationCode | undefined>;
+  updateVerificationCode(id: string, updates: Partial<DemoVerificationCode>): Promise<DemoVerificationCode>;
+  deleteVerificationCode(tenantId: string): Promise<void>;
+  cleanupExpiredVerificationCodes(): Promise<number>;
 
   // Connector operations
   getConnectors(tenantId: string): Promise<Connector[]>;
@@ -1361,6 +1371,59 @@ export class DatabaseStorage implements IStorage {
         throw createError.notFound('Connector not found or access denied');
       }
     }, 'deleteConnector');
+  }
+  // Demo verification code operations
+  async createVerificationCode(verificationCode: InsertDemoVerificationCode): Promise<DemoVerificationCode> {
+    return await withDatabaseRetry(async () => {
+      const [result] = await db
+        .insert(demoVerificationCodes)
+        .values(verificationCode)
+        .returning();
+      return result;
+    }, 'createVerificationCode');
+  }
+
+  async getVerificationCode(tenantId: string): Promise<DemoVerificationCode | undefined> {
+    return await withDatabaseRetry(async () => {
+      const [result] = await db
+        .select()
+        .from(demoVerificationCodes)
+        .where(and(
+          eq(demoVerificationCodes.tenantId, tenantId),
+          eq(demoVerificationCodes.isUsed, false)
+        ))
+        .orderBy(desc(demoVerificationCodes.createdAt))
+        .limit(1);
+      return result;
+    }, 'getVerificationCode');
+  }
+
+  async updateVerificationCode(id: string, updates: Partial<DemoVerificationCode>): Promise<DemoVerificationCode> {
+    return await withDatabaseRetry(async () => {
+      const [result] = await db
+        .update(demoVerificationCodes)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(demoVerificationCodes.id, id))
+        .returning();
+      return result;
+    }, 'updateVerificationCode');
+  }
+
+  async deleteVerificationCode(tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      await db
+        .delete(demoVerificationCodes)
+        .where(eq(demoVerificationCodes.tenantId, tenantId));
+    }, 'deleteVerificationCode');
+  }
+
+  async cleanupExpiredVerificationCodes(): Promise<number> {
+    return await withDatabaseRetry(async () => {
+      const result = await db
+        .delete(demoVerificationCodes)
+        .where(lte(demoVerificationCodes.expiresAt, new Date()));
+      return result.rowCount || 0;
+    }, 'cleanupExpiredVerificationCodes');
   }
 }
 

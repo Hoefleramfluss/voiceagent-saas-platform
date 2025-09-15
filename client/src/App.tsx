@@ -18,12 +18,16 @@ import CustomerDashboard from "@/pages/customer/dashboard";
 import CustomerUsage from "@/pages/customer/usage";
 import CustomerBilling from "@/pages/customer/billing-enhanced";
 import CustomerSupport from "@/pages/customer/support";
+import DemoSetup from "@/pages/demo-setup";
 
 function Router() {
   return (
     <Switch>
       {/* Auth page */}
       <Route path="/auth" component={AuthPage} />
+      
+      {/* Demo setup (public access) */}
+      <Route path="/demo" component={DemoSetup} />
       
       {/* Admin routes */}
       <ProtectedRoute path="/admin" component={AdminDashboard} roles={['platform_admin']} />

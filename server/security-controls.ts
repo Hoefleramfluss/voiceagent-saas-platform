@@ -72,6 +72,60 @@ export const loginRateLimit = rateLimit({
 });
 
 /**
+ * Rate limiter for demo tenant creation endpoints
+ * Prevents abuse and SMS bombing through demo setup
+ */
+export const demoTenantRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3, // Limit each IP to 3 demo tenant creations per hour
+  message: {
+    success: false,
+    error: 'Too many demo requests from this IP, please try again later.',
+    retryAfter: '1 hour'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false, // Count all requests to prevent abuse
+  skipFailedRequests: false
+});
+
+/**
+ * Rate limiter for phone verification and resend operations
+ * Prevents SMS bombing and verification brute force attacks
+ */
+export const phoneVerificationRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 10 verification attempts per 15 minutes
+  message: {
+    success: false,
+    error: 'Too many verification attempts from this IP, please try again later.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false,
+  skipFailedRequests: false
+});
+
+/**
+ * Rate limiter for resend verification code operations
+ * Strict limits to prevent SMS abuse
+ */
+export const resendCodeRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // Limit each IP to 5 resend requests per hour
+  message: {
+    success: false,
+    error: 'Too many code resend requests from this IP, please try again later.',
+    retryAfter: '1 hour'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false,
+  skipFailedRequests: false
+});
+
+/**
  * Enhanced authentication middleware for sensitive operations
  * Requires recent authentication (within last 30 minutes) for critical operations
  */
