@@ -27,6 +27,9 @@ export const auditEventTypeEnum = pgEnum('audit_event_type', ['api_key_created',
 export const subscriptionPlanStatusEnum = pgEnum('subscription_plan_status', ['active', 'inactive', 'deprecated']);
 export const subscriptionStatusEnum = pgEnum('subscription_status', ['active', 'paused', 'canceled', 'expired']);
 export const invoiceJobStatusEnum = pgEnum('invoice_job_status', ['pending', 'running', 'completed', 'failed']);
+export const flowVersionStatusEnum = pgEnum('flow_version_status', ['draft', 'staged', 'live', 'archived']);
+export const connectorTypeEnum = pgEnum('connector_type', ['crm', 'calendar']);
+export const connectorProviderEnum = pgEnum('connector_provider', ['google_calendar', 'microsoft_graph', 'hubspot', 'salesforce', 'pipedrive']);
 
 // Tenants table
 export const tenants = pgTable("tenants", {
@@ -61,11 +64,13 @@ export const bots = pgTable("bots", {
   status: botStatusEnum("status").notNull().default('pending'),
   twilioNumber: varchar("twilio_number", { length: 50 }),
   herokuAppName: varchar("heroku_app_name", { length: 255 }),
-  locale: varchar("locale", { length: 10 }).notNull().default('en-US'),
+  locale: varchar("locale", { length: 10 }).notNull().default('de-AT'),
   sttProvider: varchar("stt_provider", { length: 50 }).notNull().default('google'),
   ttsProvider: varchar("tts_provider", { length: 50 }).notNull().default('elevenlabs'),
+  systemPrompt: text("system_prompt").notNull(), // REQUIRED system prompt
   configJson: jsonb("config_json"),
   greetingMessage: text("greeting_message"),
+  currentFlowId: uuid("current_flow_id").references(() => flows.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
@@ -206,13 +211,99 @@ export const invoiceJobs = pgTable("invoice_jobs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
 
+// Flows table
+export const flows = pgTable("flows", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  isTemplate: boolean("is_template").notNull().default(false),
+  templateVariables: jsonb("template_variables"), // {brand, opening_hours, language}
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
+// Flow versions table (draft/staged/live workflow)
+export const flowVersions = pgTable("flow_versions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  flowId: uuid("flow_id").notNull().references(() => flows.id),
+  version: integer("version").notNull(),
+  status: flowVersionStatusEnum("status").notNull().default('draft'),
+  flowJson: jsonb("flow_json").notNull(), // Complete flow definition
+  publishedAt: timestamp("published_at"),
+  publishedBy: uuid("published_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
+// Tenant settings table
+export const tenantSettings = pgTable("tenant_settings", {
+  tenantId: uuid("tenant_id").primaryKey().references(() => tenants.id),
+  // Twilio settings (auth token stored in tenant_secrets for security)
+  twilioAccountSid: varchar("twilio_account_sid", { length: 255 }),
+  // STT/TTS configuration
+  sttProvider: varchar("stt_provider", { length: 50 }).notNull().default('google'),
+  sttConfig: jsonb("stt_config"),
+  ttsProvider: varchar("tts_provider", { length: 50 }).notNull().default('elevenlabs'),
+  ttsConfig: jsonb("tts_config"),
+  // OpenAI configuration (API key stored in tenant_secrets for security)
+  openaiModel: varchar("openai_model", { length: 100 }).notNull().default('gpt-4'),
+  // Localization
+  defaultLocale: varchar("default_locale", { length: 10 }).notNull().default('de-AT'),
+  // Billing package
+  billingPackageId: uuid("billing_package_id").references(() => subscriptionPlans.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
+// Connectors table (CRM/Calendar integrations)
+export const connectors = pgTable("connectors", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  type: connectorTypeEnum("type").notNull(),
+  provider: connectorProviderEnum("provider").notNull(),
+  config: jsonb("config").notNull(), // Provider-specific configuration
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
+// Tenant secrets table (encrypted secrets)
+export const tenantSecrets = pgTable("tenant_secrets", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  secretKey: varchar("secret_key", { length: 100 }).notNull(),
+  encryptedValue: text("encrypted_value").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
+// Phone number mappings table
+export const phoneNumberMappings = pgTable("phone_number_mappings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  phoneNumber: varchar("phone_number", { length: 50 }).notNull().unique(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  botId: uuid("bot_id").references(() => bots.id),
+  webhookUrl: varchar("webhook_url", { length: 500 }),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
 // Relations
-export const tenantsRelations = relations(tenants, ({ many }) => ({
+export const tenantsRelations = relations(tenants, ({ one, many }) => ({
   users: many(users),
   bots: many(bots),
   usageEvents: many(usageEvents),
   invoices: many(invoices),
-  supportTickets: many(supportTickets)
+  supportTickets: many(supportTickets),
+  flows: many(flows),
+  settings: one(tenantSettings),
+  connectors: many(connectors),
+  secrets: many(tenantSecrets),
+  phoneNumbers: many(phoneNumberMappings)
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -241,8 +332,13 @@ export const botsRelations = relations(bots, ({ one, many }) => ({
     fields: [bots.tenantId],
     references: [tenants.id]
   }),
+  currentFlow: one(flows, {
+    fields: [bots.currentFlowId],
+    references: [flows.id]
+  }),
   usageEvents: many(usageEvents),
-  provisioningJobs: many(provisioningJobs)
+  provisioningJobs: many(provisioningJobs),
+  phoneNumberMappings: many(phoneNumberMappings)
 }));
 
 export const usageEventsRelations = relations(usageEvents, ({ one }) => ({
@@ -270,6 +366,63 @@ export const supportTicketsRelations = relations(supportTickets, ({ one }) => ({
     fields: [supportTickets.assignedToUserId],
     references: [users.id],
     relationName: "assigned_tickets"
+  })
+}));
+
+// New table relations
+export const flowsRelations = relations(flows, ({ one, many }) => ({
+  tenant: one(tenants, {
+    fields: [flows.tenantId],
+    references: [tenants.id]
+  }),
+  versions: many(flowVersions),
+  bots: many(bots)
+}));
+
+export const flowVersionsRelations = relations(flowVersions, ({ one }) => ({
+  flow: one(flows, {
+    fields: [flowVersions.flowId],
+    references: [flows.id]
+  }),
+  publishedBy: one(users, {
+    fields: [flowVersions.publishedBy],
+    references: [users.id]
+  })
+}));
+
+export const tenantSettingsRelations = relations(tenantSettings, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [tenantSettings.tenantId],
+    references: [tenants.id]
+  }),
+  billingPackage: one(subscriptionPlans, {
+    fields: [tenantSettings.billingPackageId],
+    references: [subscriptionPlans.id]
+  })
+}));
+
+export const connectorsRelations = relations(connectors, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [connectors.tenantId],
+    references: [tenants.id]
+  })
+}));
+
+export const tenantSecretsRelations = relations(tenantSecrets, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [tenantSecrets.tenantId],
+    references: [tenants.id]
+  })
+}));
+
+export const phoneNumberMappingsRelations = relations(phoneNumberMappings, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [phoneNumberMappings.tenantId],
+    references: [tenants.id]
+  }),
+  bot: one(bots, {
+    fields: [phoneNumberMappings.botId],
+    references: [bots.id]
   })
 }));
 
@@ -343,6 +496,42 @@ export const insertInvoiceJobSchema = createInsertSchema(invoiceJobs).omit({
   updatedAt: true
 });
 
+// New table insert schemas
+export const insertFlowSchema = createInsertSchema(flows).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
+export const insertFlowVersionSchema = createInsertSchema(flowVersions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
+export const insertTenantSettingsSchema = createInsertSchema(tenantSettings).omit({
+  createdAt: true,
+  updatedAt: true
+});
+
+export const insertConnectorSchema = createInsertSchema(connectors).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
+export const insertTenantSecretSchema = createInsertSchema(tenantSecrets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
+export const insertPhoneNumberMappingSchema = createInsertSchema(phoneNumberMappings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true
+});
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
@@ -365,3 +554,17 @@ export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type InvoiceJob = typeof invoiceJobs.$inferSelect;
 export type InsertInvoiceJob = z.infer<typeof insertInvoiceJobSchema>;
+
+// New table types
+export type Flow = typeof flows.$inferSelect;
+export type InsertFlow = z.infer<typeof insertFlowSchema>;
+export type FlowVersion = typeof flowVersions.$inferSelect;
+export type InsertFlowVersion = z.infer<typeof insertFlowVersionSchema>;
+export type TenantSettings = typeof tenantSettings.$inferSelect;
+export type InsertTenantSettings = z.infer<typeof insertTenantSettingsSchema>;
+export type Connector = typeof connectors.$inferSelect;
+export type InsertConnector = z.infer<typeof insertConnectorSchema>;
+export type TenantSecret = typeof tenantSecrets.$inferSelect;
+export type InsertTenantSecret = z.infer<typeof insertTenantSecretSchema>;
+export type PhoneNumberMapping = typeof phoneNumberMappings.$inferSelect;
+export type InsertPhoneNumberMapping = z.infer<typeof insertPhoneNumberMappingSchema>;
