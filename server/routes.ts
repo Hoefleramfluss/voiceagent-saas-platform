@@ -1911,6 +1911,320 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // 🎯 BILLING ACCOUNTS API - Manage billing account details
+  app.get("/api/billing/accounts", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const billingAccount = await storage.getBillingAccount(user.tenantId);
+      if (!billingAccount) {
+        return res.status(404).json({ message: "No billing account found" });
+      }
+
+      res.json(billingAccount);
+    } catch (error) {
+      console.error('[Billing] Get billing account error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/billing/accounts", requireAuth, auditSensitiveOperation('CREATE_BILLING_ACCOUNT'), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      // SECURITY: No client input validation needed - we create customer server-side
+      // Check if billing account already exists
+      const existingAccount = await storage.getBillingAccount(user.tenantId);
+      if (existingAccount) {
+        return res.status(400).json({ message: "Billing account already exists" });
+      }
+
+      // Get tenant information for Stripe customer creation
+      const tenant = await storage.getTenant(user.tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+
+      // SECURITY FIX: Create Stripe customer server-side only
+      const stripeInstance = await getStripe();
+      if (!stripeInstance) {
+        return res.status(503).json({ 
+          message: "Stripe not configured. Contact administrator to configure payment processing." 
+        });
+      }
+
+      let stripeCustomerId: string;
+      try {
+        // Generate idempotency key to prevent duplicate customers
+        const customerIdempotencyKey = crypto.createHash('sha256')
+          .update(`customer:${tenant.id}:${tenant.name}`)
+          .digest('hex').substring(0, 32);
+
+        const stripeCustomer = await stripeInstance.customers.create({
+          name: tenant.name,
+          email: user.email,
+          description: `VoiceAgent customer for tenant: ${tenant.name}`,
+          metadata: {
+            tenant_id: tenant.id,
+            tenant_name: tenant.name,
+            created_by: user.id,
+            created_via: 'billing_account_api'
+          }
+        }, {
+          idempotencyKey: customerIdempotencyKey
+        });
+        
+        stripeCustomerId = stripeCustomer.id;
+        console.log(`[Billing Security] Created Stripe customer ${stripeCustomerId} for tenant ${tenant.name}`);
+      } catch (stripeError) {
+        console.error('[Billing Security] Failed to create Stripe customer:', stripeError);
+        
+        // Audit log the failure
+        await storage.createAuditLog({
+          tenantId: user.tenantId,
+          userId: user.id,
+          eventType: 'sensitive_operation',
+          operation: 'CREATE_BILLING_ACCOUNT_STRIPE_FAILED',
+          resourceId: user.tenantId,
+          details: {
+            error: (stripeError as Error).message,
+            tenantName: tenant.name
+          }
+        });
+        
+        return res.status(500).json({ 
+          message: "Failed to create payment processing account. Please try again.",
+          error: (stripeError as Error).message
+        });
+      }
+      
+      // Create billing account with server-created Stripe customer ID
+      await storage.createBillingAccount({
+        tenantId: user.tenantId,
+        stripeCustomerId
+      });
+
+      // Audit log successful creation
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'sensitive_operation',
+        operation: 'CREATE_BILLING_ACCOUNT_SUCCESS',
+        resourceId: user.tenantId,
+        details: {
+          stripeCustomerId,
+          tenantName: tenant.name
+        }
+      });
+
+      const newAccount = await storage.getBillingAccount(user.tenantId);
+      res.status(201).json(newAccount);
+    } catch (error) {
+      console.error('[Billing Security] Create billing account error:', error);
+      
+      // Audit log the error
+      try {
+        await storage.createAuditLog({
+          tenantId: user?.tenantId || 'unknown',
+          userId: user?.id || 'unknown',
+          eventType: 'sensitive_operation',
+          operation: 'CREATE_BILLING_ACCOUNT_ERROR',
+          resourceId: user?.tenantId || 'unknown',
+          details: {
+            error: (error as Error).message
+          }
+        });
+      } catch (auditError) {
+        console.error('[Billing Security] Audit logging failed:', auditError);
+      }
+      
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.put("/api/billing/accounts", requireAuth, auditSensitiveOperation('UPDATE_BILLING_ACCOUNT'), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      // SECURITY FIX: Strict validation with enum and plan ID checking
+      const validation = z.object({
+        stripeSubscriptionId: z.string().optional(),
+        currentPlanId: z.string().uuid("Invalid plan ID format").optional(),
+        subscriptionStatus: z.enum(['active', 'paused', 'canceled', 'expired'], {
+          errorMap: () => ({ message: "Subscription status must be: active, paused, canceled, or expired" })
+        }).optional(),
+        paymentMethodId: z.string().optional(),
+        subscriptionStartDate: z.string().datetime().optional(),
+        subscriptionEndDate: z.string().datetime().optional(),
+        nextBillingDate: z.string().datetime().optional()
+      }).safeParse(req.body);
+
+      if (!validation.success) {
+        console.warn('[Billing Security] Invalid update data:', validation.error.flatten());
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      // Check if billing account exists
+      const existingAccount = await storage.getBillingAccount(user.tenantId);
+      if (!existingAccount) {
+        return res.status(404).json({ message: "No billing account found" });
+      }
+
+      const updates = validation.data;
+      const auditDetails: any = { originalValues: {}, newValues: updates };
+
+      // SECURITY FIX: Validate currentPlanId against actual subscription plans
+      if (updates.currentPlanId) {
+        const subscriptionPlans = await storage.getSubscriptionPlans(true); // Only active plans
+        const planExists = subscriptionPlans.some(plan => plan.id === updates.currentPlanId);
+        
+        if (!planExists) {
+          console.warn(`[Billing Security] Invalid plan ID attempted: ${updates.currentPlanId} by user ${user.id}`);
+          
+          await storage.createAuditLog({
+            tenantId: user.tenantId,
+            userId: user.id,
+            eventType: 'sensitive_operation',
+            operation: 'UPDATE_BILLING_ACCOUNT_INVALID_PLAN',
+            resourceId: user.tenantId,
+            details: {
+              attemptedPlanId: updates.currentPlanId,
+              reason: 'Plan ID not found or inactive'
+            }
+          });
+          
+          return res.status(400).json({ message: "Invalid subscription plan ID" });
+        }
+        auditDetails.originalValues.currentPlanId = existingAccount.currentPlanId;
+      }
+
+      // SECURITY FIX: Verify Stripe subscription belongs to tenant's customer
+      if (updates.stripeSubscriptionId) {
+        const stripeInstance = await getStripe();
+        if (!stripeInstance) {
+          return res.status(503).json({ 
+            message: "Stripe not configured. Cannot verify subscription." 
+          });
+        }
+
+        try {
+          // Verify the subscription belongs to this tenant's Stripe customer
+          const stripeSubscription = await stripeInstance.subscriptions.retrieve(updates.stripeSubscriptionId);
+          
+          if (stripeSubscription.customer !== existingAccount.stripeCustomerId) {
+            console.error(`[Billing Security] Subscription ${updates.stripeSubscriptionId} does not belong to customer ${existingAccount.stripeCustomerId}`);
+            
+            await storage.createAuditLog({
+              tenantId: user.tenantId,
+              userId: user.id,
+              eventType: 'sensitive_operation',
+              operation: 'UPDATE_BILLING_ACCOUNT_SUBSCRIPTION_MISMATCH',
+              resourceId: user.tenantId,
+              details: {
+                attemptedSubscriptionId: updates.stripeSubscriptionId,
+                tenantCustomerId: existingAccount.stripeCustomerId,
+                actualCustomerId: stripeSubscription.customer
+              }
+            });
+            
+            return res.status(403).json({ message: "Subscription does not belong to this account" });
+          }
+          
+          auditDetails.originalValues.stripeSubscriptionId = existingAccount.stripeSubscriptionId;
+          auditDetails.stripeVerified = true;
+          
+        } catch (stripeError: any) {
+          console.error('[Billing Security] Stripe subscription verification failed:', stripeError);
+          
+          await storage.createAuditLog({
+            tenantId: user.tenantId,
+            userId: user.id,
+            eventType: 'sensitive_operation',
+            operation: 'UPDATE_BILLING_ACCOUNT_STRIPE_VERIFICATION_FAILED',
+            resourceId: user.tenantId,
+            details: {
+              subscriptionId: updates.stripeSubscriptionId,
+              error: stripeError.message
+            }
+          });
+          
+          return res.status(400).json({ message: "Invalid or inaccessible Stripe subscription" });
+        }
+      }
+
+      // Convert date strings to Date objects if provided
+      const processedUpdates: any = { ...updates };
+      if (updates.subscriptionStartDate) {
+        processedUpdates.subscriptionStartDate = new Date(updates.subscriptionStartDate);
+      }
+      if (updates.subscriptionEndDate) {
+        processedUpdates.subscriptionEndDate = new Date(updates.subscriptionEndDate);
+      }
+      if (updates.nextBillingDate) {
+        processedUpdates.nextBillingDate = new Date(updates.nextBillingDate);
+      }
+
+      // Store original values for audit
+      if (updates.subscriptionStatus) {
+        auditDetails.originalValues.subscriptionStatus = existingAccount.subscriptionStatus;
+      }
+      if (updates.paymentMethodId) {
+        auditDetails.originalValues.paymentMethodId = existingAccount.paymentMethodId;
+      }
+
+      // Apply the validated updates
+      await storage.updateBillingAccount(user.tenantId, processedUpdates);
+
+      // Audit log successful update
+      await storage.createAuditLog({
+        tenantId: user.tenantId,
+        userId: user.id,
+        eventType: 'sensitive_operation',
+        operation: 'UPDATE_BILLING_ACCOUNT_SUCCESS',
+        resourceId: user.tenantId,
+        details: auditDetails
+      });
+
+      const updatedAccount = await storage.getBillingAccount(user.tenantId);
+      console.log(`[Billing Security] Successfully updated billing account for tenant ${user.tenantId}`);
+      res.json(updatedAccount);
+      
+    } catch (error) {
+      console.error('[Billing Security] Update billing account error:', error);
+      
+      // Audit log the error
+      try {
+        await storage.createAuditLog({
+          tenantId: user?.tenantId || 'unknown',
+          userId: user?.id || 'unknown',
+          eventType: 'sensitive_operation',
+          operation: 'UPDATE_BILLING_ACCOUNT_ERROR',
+          resourceId: user?.tenantId || 'unknown',
+          details: {
+            error: (error as Error).message,
+            requestData: req.body
+          }
+        });
+      } catch (auditError) {
+        console.error('[Billing Security] Audit logging failed:', auditError);
+      }
+      
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // Admin Package Management Routes
   app.get("/api/admin/packages", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
