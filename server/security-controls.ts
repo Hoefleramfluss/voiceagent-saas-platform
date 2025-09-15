@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 /**
  * Enhanced Security Controls for Sensitive Operations
@@ -85,8 +85,9 @@ export const oauthAuthorizationRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest) => {
-    // Rate limit by IP + tenant for better isolation
-    return `oauth_auth:${req.ip}:${req.user?.tenantId || 'unknown'}`;
+    // Rate limit by IP + tenant for better isolation (IPv6-safe)
+    const safeIP = ipKeyGenerator(req);
+    return `oauth_auth:${safeIP}:${req.user?.tenantId || 'unknown'}`;
   }
 });
 
@@ -104,8 +105,9 @@ export const oauthCallbackRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest) => {
-    // Rate limit by IP + provider for isolation
-    return `oauth_callback:${req.ip}:${req.params?.provider || 'unknown'}`;
+    // Rate limit by IP + provider for isolation (IPv6-safe)
+    const safeIP = ipKeyGenerator(req);
+    return `oauth_callback:${safeIP}:${req.params?.provider || 'unknown'}`;
   }
 });
 

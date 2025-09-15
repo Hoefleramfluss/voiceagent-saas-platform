@@ -207,7 +207,7 @@ export function applyWAFRules(req: ExtendedRequest, res: Response, next: NextFun
 
   // Block known malicious patterns in URL/User-Agent
   const maliciousPatterns = [
-    /admin|phpmyadmin|wp-admin|login\.php/i,
+    /phpmyadmin|wp-admin|login\.php|admin\.php|admin\/index\.php/i, // Specific admin exploits, not legitimate /admin routes
     /\.\.|\/etc\/|\/proc\/|\/sys\//,
     /<script|javascript:|onload=|onerror=/i,
     /union.*select|drop.*table|exec.*xp_/i
