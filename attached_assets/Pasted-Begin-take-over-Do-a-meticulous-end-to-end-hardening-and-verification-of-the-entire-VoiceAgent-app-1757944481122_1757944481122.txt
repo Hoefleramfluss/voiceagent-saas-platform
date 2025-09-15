@@ -1,0 +1,54 @@
+Begin take over.
+Do a meticulous, end-to-end hardening and verification of the entire VoiceAgent app. Fix any missing or buggy feature, self-test thoroughly, and only deliver when the whole app is error-free, especially the per-tenant drag-and-drop bot workflow. You may spawn sub-agents. Do not expose secrets. Provide PASS/FAIL with evidence for each checklist item.
+A) Close all functional gaps (build to spec)
+Phone → Tenant Mapping API (CRUD)
+Implement /api/admin/phone-mappings (list/create/update/delete) with strict tenant isolation, E.164 normalization, uniqueness constraints (one active mapping per normalized number), and FK integrity (tenant_id, bot_id).
+Replace any manual DB steps in docs with the new API + an Admin UI table.
+Twilio End-to-End
+Normalize From/To to E.164, resolve tenant by To number, route to that tenant’s live flow.
+Webhook signature verification; rate limiting; audit logs.
+Provide a reproducible curl simulation and confirm correct flow execution per tenant.
+Drag-and-Drop Flow Builder (per tenant)
+Ensure the visual builder persists a versioned JSON graph (Draft → Staged → Live), with schema validation and single-live invariant per flow.
+Required System Prompt per bot (block publish if empty).
+Session state, retries, barge-in, human handoff in runtime validated.
+UI/UX: create nodes, connect edges, save draft, stage, publish; load live run-time.
+Billing & Usage
+Track voicebot minutes (media stream) and forwarding minutes (<Dial> segments).
+Monthly aggregator: base fee + max(0, used − free) × overage (voicebot vs forwarding rates).
+Admin ABRECHNUNGEN page: no empty Select.Item values (use "all" for clear); no runtime errors.
+Produce a sample invoice payload; keep Stripe server-only (sk_).
+Stripe
+Frontend strictly pk_; backend strictly sk_; health check must use secret key (no permission errors).
+Webhooks with raw body verification; include success/failure tests; no secrets in logs.
+Connectors (Calendar/CRM)
+Enforce tenantId on all service/adapters/routes; nonce persistence + provider binding in OAuth callbacks.
+Implement Google Calendar happy-path: flow action creates an event in the tenant’s calendar.
+Provide negative tests (wrong tenant → 403, missing nonce/state → 400/403).
+Localization & Admin UX
+Default German across admin/customer UIs (Abrechnung, Kunden, Voice-Bots, Paket-Verwaltung).
+No mixed locales; labels/messages verified.
+B) Data mapping & constraints (consistency)
+E.164 normalization persisted; region-aware validation (AT, DE, US, UK).
+DB migrations for constraints (unique active mapping, CHECK E.164), cascade/cleanup semantics for tests.
+Strict FK integrity: tenants, bots, flows, connectors, phone mappings.
+C) Security & Ops
+WAF patterns allow legitimate /admin assets; block exploit signatures.
+IPv6-safe rate limiting per tenant/phone/user; metrics exposed.
+Session cookie flags correct for environment; no secrets in logs (only prefixes); audit on publish, connector changes, phone mappings.
+D) Test & acceptance (must pass before delivery)
+Produce a concise test report (PASS/FAIL + evidence: logs/JSON/screenshot links) covering:
+/api/health → { database:"operational", redis:"operational", stripe:"operational" }.
+Tenant isolation: A/B cross-access negative tests → blocked; happy paths OK.
+Phone mappings CRUD via API; Twilio webhook simulations route to the right tenant + live flow.
+Drag-and-drop builder: create→stage→publish; runtime executes; required System Prompt enforced.
+Billing: simulate calls (bot + transfer), aggregator deducts free minutes; invoice payload computed.
+Stripe: frontend pk_ only; no console errors; backend uses sk_; webhook tests green.
+Connectors: OAuth (Google Calendar) happy path creates event; CSRF/HMAC state + nonce persistence verified.
+Localization: key screens in German; no mixed locales.
+Logs/Audit: actions recorded; no secrets leaked.
+Deliverables
+PR(s) with migrations, code, enterprise/e2e test results (target 100%, ≥95% minimum), short release notes, and updated README/RUNBOOK.
+Updated Admin UI for phone mappings (no raw SQL in docs).
+If any check fails, auto-fix and re-run until PASS. Only then deliver the final report.
+Proceed and return with the PASS report and artifact links when all items are green and give me the global_admin access for the published App - the same credentials what I use in the preview are not working.
