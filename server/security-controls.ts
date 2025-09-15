@@ -86,7 +86,7 @@ export const oauthAuthorizationRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest) => {
     // Rate limit by IP + tenant for better isolation (IPv6-safe)
-    const safeIP = ipKeyGenerator(req);
+    const safeIP = ipKeyGenerator(req.ip || req.connection?.remoteAddress || '127.0.0.1');
     return `oauth_auth:${safeIP}:${req.user?.tenantId || 'unknown'}`;
   }
 });
@@ -106,7 +106,7 @@ export const oauthCallbackRateLimit = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest) => {
     // Rate limit by IP + provider for isolation (IPv6-safe)
-    const safeIP = ipKeyGenerator(req);
+    const safeIP = ipKeyGenerator(req.ip || req.connection?.remoteAddress || '127.0.0.1');
     return `oauth_callback:${safeIP}:${req.params?.provider || 'unknown'}`;
   }
 });
