@@ -299,6 +299,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // 📋 AUDIT LOGS API - Admin audit trail viewing
+  app.get("/api/audit-logs", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const {
+        limit = '50',
+        offset = '0',
+        tenantId,
+        userId,
+        eventType,
+        startDate,
+        endDate
+      } = req.query;
+
+      const options: Parameters<typeof storage.getAuditLogs>[0] = {
+        limit: Math.min(parseInt(limit as string, 10), 1000), // Max 1000 logs
+        offset: parseInt(offset as string, 10),
+        tenantId: tenantId as string,
+        userId: userId as string,
+        eventType: eventType as string,
+        startDate: startDate ? new Date(startDate as string) : undefined,
+        endDate: endDate ? new Date(endDate as string) : undefined
+      };
+
+      const auditLogs = await storage.getAuditLogs(options);
+      
+      res.json({
+        logs: auditLogs,
+        pagination: {
+          limit: options.limit,
+          offset: options.offset,
+          hasMore: auditLogs.length === options.limit
+        }
+      });
+    } catch (error) {
+      console.error('[Audit Logs API] Get audit logs error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // Error monitoring endpoint (Admin only)
   app.get("/api/monitoring/errors", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
