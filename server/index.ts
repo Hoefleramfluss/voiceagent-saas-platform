@@ -3,6 +3,8 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupProductionSecurity, setupHealthCheck, getSecurityConfig } from "./production-security";
 import { automatedInvoiceService } from "./automated-invoice-service";
+import { errorHandlingMiddleware, getSystemHealth } from "./error-handling";
+import { getResilienceHealth } from "./retry-utils";
 
 const app = express();
 
@@ -65,22 +67,8 @@ app.use((req, res, next) => {
     const server = await registerRoutes(app);
     console.log(`[STARTUP] Routes registered successfully`);
 
-    app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
-      const status = err.status || err.statusCode || 500;
-      const message = err.message || "Internal Server Error";
-      
-      // Log error details for debugging without crashing the server
-      console.error(`[ERROR] ${status}: ${message}`);
-      console.error(`[ERROR] Request: ${req.method} ${req.path}`);
-      if (process.env.NODE_ENV === 'development') {
-        console.error(`[ERROR] Stack:`, err.stack);
-      }
-      
-      // Send error response without crashing the server
-      if (!res.headersSent) {
-        res.status(status).json({ message });
-      }
-    });
+    // Use centralized error handling middleware
+    app.use(errorHandlingMiddleware);
 
     // Setup Vite in development or serve static files in production
     if (app.get("env") === "development") {
