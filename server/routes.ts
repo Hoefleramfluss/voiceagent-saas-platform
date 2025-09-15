@@ -2831,6 +2831,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     disconnectConnector
   } = await import('./connector-oauth-service');
 
+  // 🔗 CONNECTOR ENDPOINTS - Fixed routing order: literal routes BEFORE parameterized routes
+  
+  // Provider-type validation mapping
+  const providerTypeMap: Record<string, 'crm' | 'calendar'> = {
+    google_calendar: 'calendar',
+    microsoft_graph: 'calendar',
+    hubspot: 'crm',
+    salesforce: 'crm',
+    pipedrive: 'crm'
+  };
+
+  // LITERAL ROUTES FIRST (to prevent shadowing by parameterized routes)
+  
   // Get connector configurations (Customer Admin/User)
   app.get("/api/connectors/config", 
     requireAuth, 
@@ -2859,12 +2872,162 @@ export async function registerRoutes(app: Express): Promise<Server> {
     testConnectorConnection
   );
 
-  // Disconnect connector (Customer Admin only)
+  // Disconnect connector (Customer Admin only) - provider-specific OAuth cleanup
   app.delete("/api/connectors/:provider", 
     requireAuth, 
     requireRole(['customer_admin']), 
     disconnectConnector
   );
+
+  // CONNECTOR CRUD ENDPOINTS - Basic connector management (parameterized routes LAST)
+  
+  app.get("/api/connectors", requireAuth, requireRole(['customer_admin', 'customer_user']), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const { type } = req.query;
+      let connectors;
+      
+      if (type && (type === 'crm' || type === 'calendar')) {
+        connectors = await storage.getConnectorsByType(user.tenantId, type as 'crm' | 'calendar');
+      } else {
+        connectors = await storage.getConnectors(user.tenantId);
+      }
+
+      res.json(connectors);
+    } catch (error) {
+      console.error('[Connectors] Get connectors error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/connectors/:id", requireAuth, requireRole(['customer_admin', 'customer_user']), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const connector = await storage.getConnector(req.params.id, user.tenantId);
+      if (!connector) {
+        return res.status(404).json({ message: "Connector not found" });
+      }
+
+      res.json(connector);
+    } catch (error) {
+      console.error('[Connectors] Get connector error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/connectors", requireAuth, requireRole(['customer_admin']), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const validation = z.object({
+        name: z.string().min(1, "Name is required"),
+        type: z.enum(['crm', 'calendar'], { errorMap: () => ({ message: "Type must be 'crm' or 'calendar'" }) }),
+        provider: z.enum(['google_calendar', 'microsoft_graph', 'hubspot', 'salesforce', 'pipedrive'], {
+          errorMap: () => ({ message: "Invalid provider" })
+        }),
+        config: z.object({}).passthrough() // Allow any config object structure
+      }).safeParse(req.body);
+
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const { name, type, provider, config } = validation.data;
+
+      // CRITICAL FIX: Validate provider matches type
+      if (providerTypeMap[provider] !== type) {
+        return res.status(400).json({ 
+          message: `Provider '${provider}' does not match type '${type}'. Expected type: '${providerTypeMap[provider]}'` 
+        });
+      }
+
+      const connector = await storage.createConnector({
+        tenantId: user.tenantId,
+        name,
+        type,
+        provider,
+        config,
+        isActive: true
+      });
+
+      res.status(201).json(connector);
+    } catch (error) {
+      console.error('[Connectors] Create connector error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.put("/api/connectors/:id", requireAuth, requireRole(['customer_admin']), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      const validation = z.object({
+        name: z.string().min(1).optional(),
+        config: z.object({}).passthrough().optional(),
+        isActive: z.boolean().optional()
+      }).safeParse(req.body);
+
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      // Check if connector exists and belongs to tenant
+      const existingConnector = await storage.getConnector(req.params.id, user.tenantId);
+      if (!existingConnector) {
+        return res.status(404).json({ message: "Connector not found" });
+      }
+
+      const updates = validation.data;
+      const updatedConnector = await storage.updateConnector(req.params.id, user.tenantId, updates);
+
+      res.json(updatedConnector);
+    } catch (error) {
+      console.error('[Connectors] Update connector error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // CRITICAL FIX: Renamed CRUD DELETE route to avoid conflict with provider disconnect
+  app.delete("/api/connectors/id/:id", requireAuth, requireRole(['customer_admin']), async (req, res) => {
+    try {
+      const user = req.user;
+      if (!user?.tenantId) {
+        return res.status(401).json({ message: "Tenant ID required" });
+      }
+
+      // Check if connector exists and belongs to tenant
+      const existingConnector = await storage.getConnector(req.params.id, user.tenantId);
+      if (!existingConnector) {
+        return res.status(404).json({ message: "Connector not found" });
+      }
+
+      await storage.deleteConnector(req.params.id, user.tenantId);
+      res.json({ message: "Connector deleted successfully" });
+    } catch (error) {
+      console.error('[Connectors] Delete connector error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
 
   // Raw body is now properly captured in server/index.ts BEFORE global body parsing
   // This ensures Twilio signature verification works without hanging requests

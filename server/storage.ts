@@ -167,6 +167,14 @@ export interface IStorage {
     endDate?: Date;
   }): Promise<AuditLog[]>;
 
+  // Connector operations
+  getConnectors(tenantId: string): Promise<Connector[]>;
+  getConnector(id: string, tenantId: string): Promise<Connector | undefined>;
+  getConnectorsByType(tenantId: string, type: 'crm' | 'calendar'): Promise<Connector[]>;
+  createConnector(connector: InsertConnector): Promise<Connector>;
+  updateConnector(id: string, tenantId: string, updates: Partial<Connector>): Promise<Connector>;
+  deleteConnector(id: string, tenantId: string): Promise<void>;
+
   // Subscription management
   getSubscriptionPlans(activeOnly?: boolean): Promise<SubscriptionPlan[]>;
   getSubscriptionPlan(planId: string): Promise<SubscriptionPlan | null>;
