@@ -3238,10 +3238,131 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.delete("/api/admin/users/:userId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    const targetUserId = req.params.userId;
+    const currentUserId = req.user?.id;
+    const currentUserEmail = req.user?.email;
+    const ipAddress = req.ip;
+    const userAgent = req.get('user-agent') || '';
+
     try {
-      await storage.deleteUser(req.params.userId);
+      // Get the target user to check their role
+      const targetUser = await storage.getUser(targetUserId);
+      if (!targetUser) {
+        // Log failed attempt for non-existent user
+        await storage.createAuditLog({
+          eventType: 'sensitive_operation',
+          operation: 'DELETE_USER_NOT_FOUND',
+          userId: currentUserId,
+          userEmail: currentUserEmail,
+          tenantId: req.user?.tenantId,
+          ipAddress,
+          userAgent,
+          success: false,
+          statusCode: 404,
+          metadata: {
+            targetUserId,
+            reason: 'Target user not found'
+          }
+        });
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Security Check 1: Prevent self-deletion
+      if (targetUserId === currentUserId) {
+        await storage.createAuditLog({
+          eventType: 'sensitive_operation',
+          operation: 'DELETE_USER_BLOCKED_SELF',
+          userId: currentUserId,
+          userEmail: currentUserEmail,
+          tenantId: req.user?.tenantId,
+          ipAddress,
+          userAgent,
+          success: false,
+          statusCode: 403,
+          metadata: {
+            targetUserId,
+            targetUserEmail: targetUser.email,
+            reason: 'Self-deletion attempt blocked'
+          }
+        });
+        return res.status(403).json({ 
+          message: "Cannot delete your own account. Please ask another administrator to perform this action." 
+        });
+      }
+
+      // Security Check 2: Prevent deletion of last platform admin
+      if (targetUser.role === 'platform_admin') {
+        const allUsers = await storage.getAllUsers();
+        const platformAdminCount = allUsers.filter(user => user.role === 'platform_admin' && user.status === 'active').length;
+        
+        if (platformAdminCount <= 1) {
+          await storage.createAuditLog({
+            eventType: 'sensitive_operation',
+            operation: 'DELETE_USER_BLOCKED_LAST_ADMIN',
+            userId: currentUserId,
+            userEmail: currentUserEmail,
+            tenantId: req.user?.tenantId,
+            ipAddress,
+            userAgent,
+            success: false,
+            statusCode: 403,
+            metadata: {
+              targetUserId,
+              targetUserEmail: targetUser.email,
+              targetUserRole: targetUser.role,
+              platformAdminCount,
+              reason: 'Prevented deletion of last platform administrator'
+            }
+          });
+          return res.status(403).json({ 
+            message: "Cannot delete the last platform administrator. System requires at least one active platform admin." 
+          });
+        }
+      }
+
+      // All security checks passed - proceed with deletion
+      await storage.deleteUser(targetUserId);
+      
+      // Log successful deletion
+      await storage.createAuditLog({
+        eventType: 'sensitive_operation',
+        operation: 'DELETE_USER_SUCCESS',
+        userId: currentUserId,
+        userEmail: currentUserEmail,
+        tenantId: req.user?.tenantId,
+        ipAddress,
+        userAgent,
+        success: true,
+        statusCode: 200,
+        metadata: {
+          targetUserId,
+          targetUserEmail: targetUser.email,
+          targetUserRole: targetUser.role,
+          targetUserTenant: targetUser.tenantId,
+          deletedAt: new Date().toISOString()
+        }
+      });
+
       res.json({ message: "User deleted successfully" });
     } catch (error) {
+      // Log unexpected errors
+      await storage.createAuditLog({
+        eventType: 'sensitive_operation',
+        operation: 'DELETE_USER_ERROR',
+        userId: currentUserId,
+        userEmail: currentUserEmail,
+        tenantId: req.user?.tenantId,
+        ipAddress,
+        userAgent,
+        success: false,
+        statusCode: 500,
+        metadata: {
+          targetUserId,
+          error: (error as Error).message,
+          reason: 'Unexpected error during user deletion'
+        }
+      });
+
       if ((error as Error).message.includes('not found') || (error as Error).message.includes('Not found')) {
         return res.status(404).json({ message: "User not found" });
       }
