@@ -250,7 +250,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           services.stripe = "not_configured";
         }
       } catch (stripeError) {
-        console.error('[Health Check] Stripe validation failed:', stripeError);
+        // Handle Stripe configuration issues gracefully
+        const errorMessage = stripeError instanceof Error ? stripeError.message : 'Unknown error';
+        console.warn(`[Health Check] Stripe unavailable: ${errorMessage}`);
         services.stripe = "error";
       }
 
@@ -603,7 +605,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Enrich with version information
       const flowsWithVersions = await Promise.all(
         paginatedFlows.map(async (flow) => {
-          const versions = await storage.getFlowVersions(flow.id, user.tenantId);
+          const versions = await storage.getFlowVersions(flow.id, user.tenantId!);
           const liveVersion = versions.find(v => v.status === 'live');
           const stagedVersion = versions.find(v => v.status === 'staged');
           const draftVersion = versions.find(v => v.status === 'draft');
@@ -640,8 +642,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Tenant ID required" });
       }
 
-      // Validate flow data
-      const validation = insertFlowSchema.extend({
+      // Validate flow data - omit tenantId to prevent user-supplied tenant scoping
+      const validation = insertFlowSchema.omit({ tenantId: true }).extend({
         initialFlowJson: FlowJsonSchema.optional()
       }).safeParse(req.body);
 
@@ -676,7 +678,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.createAuditLog({
           tenantId: user.tenantId,
           userId: user.id,
-          eventType: 'flow_created',
+          eventType: 'sensitive_operation',
+          operation: 'FLOW_CREATE_WITH_VERSION',
+          success: true,
           metadata: {
             flowId: flow.id,
             versionId: version.id,
@@ -696,7 +700,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.createAuditLog({
           tenantId: user.tenantId,
           userId: user.id,
-          eventType: 'flow_created',
+          eventType: 'sensitive_operation',
+          operation: 'FLOW_CREATE',
+          success: true,
           metadata: {
             flowId: flow.id,
             flowName: flow.name
@@ -790,7 +796,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createAuditLog({
         tenantId: user.tenantId,
         userId: user.id,
-        eventType: 'flow_updated',
+        eventType: 'sensitive_operation',
+        operation: 'FLOW_UPDATE',
+        success: true,
         metadata: {
           flowId: id,
           flowName: updatedFlow.name,
@@ -837,7 +845,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createAuditLog({
         tenantId: user.tenantId,
         userId: user.id,
-        eventType: 'flow_deleted',
+        eventType: 'sensitive_operation',
+        operation: 'FLOW_DELETE',
+        success: true,
         metadata: {
           flowId: id,
           flowName: existingFlow.name
@@ -950,7 +960,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createAuditLog({
         tenantId: user.tenantId,
         userId: user.id,
-        eventType: 'flow_version_created',
+        eventType: 'sensitive_operation',
+        operation: 'FLOW_VERSION_CREATE',
+        success: true,
         metadata: {
           flowId: id,
           versionId: version.id,
@@ -1051,7 +1063,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createAuditLog({
         tenantId: user.tenantId,
         userId: user.id,
-        eventType: 'flow_version_updated',
+        eventType: 'sensitive_operation',
+        operation: 'FLOW_VERSION_UPDATE',
+        success: true,
         metadata: {
           flowId: id,
           versionId,
@@ -1120,6 +1134,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Get all bots using this flow (needed for audit metadata)
+      const bots = await storage.getBots(user.tenantId);
+      const botsUsingFlow = bots.filter(bot => bot.currentFlowId === id);
+
       // For live promotion, demote current live version if exists
       if (targetStatus === 'live') {
         const currentLive = await storage.getFlowVersionByStatus(id, 'live', user.tenantId);
@@ -1128,9 +1146,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         // Update all bots using this flow to the new live version
-        const bots = await storage.getBots(user.tenantId);
-        const botsUsingFlow = bots.filter(bot => bot.currentFlowId === id);
-        
         for (const bot of botsUsingFlow) {
           // The currentFlowId stays the same, but the live version changes
           // This could trigger bot redeployment in a real system
@@ -1143,7 +1158,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createAuditLog({
         tenantId: user.tenantId,
         userId: user.id,
-        eventType: 'flow_version_promoted',
+        eventType: 'sensitive_operation',
+        operation: 'FLOW_VERSION_PROMOTE',
+        success: true,
         metadata: {
           flowId: id,
           versionId,
@@ -1151,7 +1168,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           flowName: flow.name,
           fromStatus: version.status,
           toStatus: targetStatus,
-          affectedBots: targetStatus === 'live' ? bots.filter(bot => bot.currentFlowId === id).length : 0
+          affectedBots: targetStatus === 'live' ? (botsUsingFlow?.length || 0) : 0
         }
       });
 
@@ -1199,7 +1216,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createAuditLog({
         tenantId: user.tenantId,
         userId: user.id,
-        eventType: 'flow_version_archived',
+        eventType: 'sensitive_operation',
+        operation: 'FLOW_VERSION_ARCHIVE',
+        success: true,
         metadata: {
           flowId: id,
           versionId,
@@ -2427,16 +2446,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // TENANT ROUTING: Find bot by phone number mapping
       let phoneMapping, bot, tenant;
       try {
-        phoneMapping = await storage.getPhoneNumberMapping(normalizedTo);
+        phoneMapping = await storage.getPhoneNumberMappingByPhone(normalizedTo);
         if (!phoneMapping) {
           console.warn('[TwilioWebhook] No bot mapping found for phone number:', normalizedTo);
           // AUDIT: Log unmapped phone number attempts
-          await auditSensitiveOperation('UNMAPPED_PHONE_CALL', {
-            callSid: CallSid,
-            from: normalizedFrom,
-            to: normalizedTo,
-            reason: 'No bot mapping found'
-          })(req as any, res as any, () => {});
+          try {
+            await storage.createAuditLog({
+              eventType: 'sensitive_operation',
+              operation: 'UNMAPPED_PHONE_CALL',
+              success: false,
+              ipAddress: req.ip,
+              userAgent: req.get('User-Agent'),
+              metadata: {
+                callSid: CallSid,
+                from: normalizedFrom,
+                to: normalizedTo,
+                reason: 'No bot mapping found'
+              }
+            });
+          } catch (auditError) {
+            console.warn('[TwilioWebhook] Audit logging failed:', auditError);
+          }
           
           return res.status(404).set('Content-Type', 'text/xml').send(
             '<Response><Say voice="alice">This number is not currently available. Please contact support.</Say></Response>'
@@ -2444,8 +2474,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         // Get bot and tenant information for tenant isolation
-        bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId);
-        tenant = await storage.getTenant(phoneMapping.tenantId);
+        if (!phoneMapping.tenantId) {
+          console.error('[TwilioWebhook] Phone mapping missing tenantId:', phoneMapping);
+          return res.status(500).set('Content-Type', 'text/xml').send(
+            '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
+          );
+        }
+        bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId!);
+        tenant = await storage.getTenant(phoneMapping.tenantId!);
         
         if (!bot || !tenant) {
           console.error('[TwilioWebhook] Bot or tenant not found:', { botId: phoneMapping.botId, tenantId: phoneMapping.tenantId });
@@ -2462,15 +2498,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // AUDIT LOGGING: Track incoming call with full context
       try {
-        await auditSensitiveOperation('INCOMING_CALL_RECEIVED', {
-          callSid: CallSid,
-          from: normalizedFrom,
-          to: normalizedTo,
+        await storage.createAuditLog({
+          eventType: 'sensitive_operation',
+          operation: 'INCOMING_CALL_RECEIVED',
+          success: true,
           tenantId: tenant.id,
-          botId: bot.id,
-          callStatus: CallStatus,
-          timestamp: new Date().toISOString()
-        })(req as any, res as any, () => {});
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          metadata: {
+            callSid: CallSid,
+            from: normalizedFrom,
+            to: normalizedTo,
+            botId: bot.id,
+            callStatus: CallStatus,
+            timestamp: new Date().toISOString()
+          }
+        });
       } catch (auditError) {
         console.warn('[TwilioWebhook] Audit logging failed:', auditError);
         // Continue processing even if audit fails
@@ -2481,16 +2524,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.createUsageEvent({
           tenantId: tenant.id,
           botId: bot.id,
-          eventType: 'voice_call_initiated',
-          quantity: 1,
+          kind: 'call',
+          quantity: '1',
           metadata: {
             callSid: CallSid,
             from: normalizedFrom,
             to: normalizedTo,
             callStatus: CallStatus,
             direction: 'inbound'
-          },
-          timestamp: new Date()
+          }
         });
       } catch (usageError) {
         console.warn('[TwilioWebhook] Usage event creation failed:', usageError);
@@ -2499,7 +2541,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Generate tenant-specific TwiML response
       const botName = bot.name || 'VoiceBot';
-      const greeting = bot.metadata?.greeting || `Hello! Welcome to ${tenant.name}. Your call is being processed by ${botName}.`;
+      const greeting = bot.greetingMessage || `Hello! Welcome to ${tenant.name}. Your call is being processed by ${botName}.`;
       
       // Respond with TwiML
       res.set('Content-Type', 'text/xml');
@@ -2549,10 +2591,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (To) {
         try {
           const normalizedTo = normalizePhoneNumber(To);
-          phoneMapping = await storage.getPhoneNumberMapping(normalizedTo);
+          phoneMapping = await storage.getPhoneNumberMappingByPhone(normalizedTo);
           if (phoneMapping) {
-            bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId);
-            tenant = await storage.getTenant(phoneMapping.tenantId);
+            if (!phoneMapping.tenantId) {
+              console.warn('[TwilioWebhook] Phone mapping missing tenantId for status update');
+              // Continue without bot/tenant context
+            } else {
+              bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId!);
+              tenant = await storage.getTenant(phoneMapping.tenantId!);
+            }
           }
         } catch (error) {
           console.warn('[TwilioWebhook] Could not resolve phone mapping for status update:', error);
@@ -2562,18 +2609,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // AUDIT LOGGING: Track call status changes with context
       try {
-        await auditSensitiveOperation('CALL_STATUS_UPDATE', {
-          callSid: CallSid,
-          callStatus: CallStatus,
-          from: From,
-          to: To,
-          direction: Direction,
-          duration: CallDuration,
-          answeredBy: AnsweredBy,
+        await storage.createAuditLog({
+          eventType: 'sensitive_operation',
+          operation: 'CALL_STATUS_UPDATE',
+          success: true,
           tenantId: tenant?.id,
-          botId: bot?.id,
-          timestamp: Timestamp || new Date().toISOString()
-        })(req as any, res as any, () => {});
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          metadata: {
+            callSid: CallSid,
+            callStatus: CallStatus,
+            from: From,
+            to: To,
+            direction: Direction,
+            duration: CallDuration,
+            answeredBy: AnsweredBy,
+            botId: bot?.id,
+            timestamp: Timestamp || new Date().toISOString()
+          }
+        });
       } catch (auditError) {
         console.warn('[TwilioWebhook] Status audit logging failed:', auditError);
       }
@@ -2585,8 +2639,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.createUsageEvent({
             tenantId: tenant.id,
             botId: bot.id,
-            eventType: CallStatus === 'completed' ? 'voice_call_completed' : 'voice_call_status',
-            quantity: parseInt(CallDuration), // Duration in seconds
+            kind: 'voice_bot_minute',
+            quantity: Math.ceil(parseInt(CallDuration) / 60).toString(), // Convert to minutes as string
             metadata: {
               callSid: CallSid,
               callStatus: CallStatus,
@@ -2596,8 +2650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               duration: CallDuration,
               answeredBy: AnsweredBy,
               finalStatus: CallStatus
-            },
-            timestamp: new Date()
+            }
           });
           
           console.log(`[TwilioWebhook] Created usage event for call ${CallSid}: ${CallDuration}s`);

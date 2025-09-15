@@ -696,8 +696,36 @@ export class DatabaseStorage implements IStorage {
 
   // Audit log operations
   async createAuditLog(insertAuditLog: InsertAuditLog): Promise<AuditLog> {
+    // ARCHITECT'S AUDIT EVENT TYPE NORMALIZATION FIX
+    const validEventTypes = ['api_key_created', 'api_key_deleted', 'user_login', 'user_logout', 'password_change', 'role_change', 'sensitive_operation'];
+    
+    let { eventType, operation, metadata, ...rest } = insertAuditLog;
+    
+    // Temporary logging to identify problematic code path
+    console.log(`[AUDIT DEBUG] Incoming audit log - eventType: '${eventType}', operation: '${operation}'`);
+    
+    if (!validEventTypes.includes(eventType as string)) {
+      console.warn(`[AUDIT] Invalid eventType '${eventType}' normalized to 'sensitive_operation'`);
+      // Record original for debugging
+      metadata = { ...metadata, originalEventType: eventType };
+      eventType = 'sensitive_operation' as any;
+      operation = operation || 'UNKNOWN';
+    }
+    
+    // Ensure operation is present
+    if (!operation) {
+      operation = 'UNKNOWN';
+    }
+    
+    const normalizedAuditLog = {
+      ...rest,
+      eventType,
+      operation,
+      metadata
+    };
+    
     const [auditLog] = await db.insert(auditLogs)
-      .values(insertAuditLog)
+      .values(normalizedAuditLog)
       .returning();
     return auditLog;
   }

@@ -63,7 +63,12 @@ export async function decryptApiKey(ciphertext: string): Promise<string> {
     
     return decrypted.toString('utf8');
   } catch (error) {
-    console.error('Decryption error:', error);
+    // Log minimal info for decryption failures - avoid stack traces for expected issues
+    if (error instanceof Error) {
+      console.warn('Decryption failed:', error.message);
+    } else {
+      console.warn('Decryption failed: Unknown error');
+    }
     throw new Error('Failed to decrypt API key - data may be corrupted or tampered with');
   }
 }
