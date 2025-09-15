@@ -82,6 +82,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
 
+  // Apply enterprise hardening security controls
+  const { 
+    enforceHTTPS, 
+    setEnterpriseSecurityHeaders, 
+    applyWAFRules, 
+    detectTenantScopeViolations,
+    getSecurityMetrics,
+    resetSecurityMetrics
+  } = await import('./enterprise-hardening');
+  
+  // Global security middleware (order matters!)
+  app.use(enforceHTTPS);                    // HTTPS enforcement first
+  app.use(setEnterpriseSecurityHeaders);    // Security headers
+  app.use(applyWAFRules);                   // WAF rules before other processing
+  
+  // Apply tenant scope detection to authenticated routes
+  app.use('/api', detectTenantScopeViolations);
+
+  // Enterprise security metrics endpoints
+  app.get("/api/admin/security/metrics", 
+    requireAuth, 
+    requireRole(['platform_admin']),
+    getSecurityMetrics
+  );
+  
+  app.post("/api/admin/security/reset-metrics", 
+    requireAuth, 
+    requireRole(['platform_admin']),
+    requireAllowedIP,
+    auditSensitiveOperation('RESET_SECURITY_METRICS'),
+    resetSecurityMetrics
+  );
+
   // Demo tenant setup endpoints (no auth required for demo)
   app.post("/api/demo/create-tenant", demoTenantRateLimit, async (req, res) => {
     try {
