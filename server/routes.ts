@@ -12,6 +12,7 @@ import { billingCalculator } from "./billing-calculator";
 import { enhancedBillingCalculator } from "./enhanced-billing-calculator";
 import { stripeInvoiceService } from "./stripe-invoice-service";
 import { stripeWebhookService } from "./stripe-webhook-service";
+import { automatedInvoiceService } from "./automated-invoice-service";
 import { 
   apiKeyRateLimit, 
   criticalKeyOperationsRateLimit, 
@@ -1050,6 +1051,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('[Admin Billing] Overview error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Automated Invoice Generation Admin Routes
+  app.post("/api/admin/invoices/generate-all", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { periodStart, periodEnd } = req.body;
+      
+      // Parse dates if provided
+      let startDate: Date | undefined;
+      let endDate: Date | undefined;
+      
+      if (periodStart) {
+        startDate = new Date(periodStart);
+        if (isNaN(startDate.getTime())) {
+          return res.status(400).json({ message: "Invalid periodStart date" });
+        }
+      }
+      
+      if (periodEnd) {
+        endDate = new Date(periodEnd);
+        if (isNaN(endDate.getTime())) {
+          return res.status(400).json({ message: "Invalid periodEnd date" });
+        }
+      }
+      
+      // Trigger automated invoice generation
+      const job = await automatedInvoiceService.forceRunMonthlyInvoicing(startDate, endDate);
+      
+      res.json({
+        message: "Automated invoice generation started",
+        jobId: job.id,
+        status: job.status,
+        totalTenants: job.totalTenants
+      });
+    } catch (error) {
+      console.error('[Admin] Force invoice generation error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/admin/invoices/jobs", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const jobs = automatedInvoiceService.getAllJobs();
+      res.json(jobs);
+    } catch (error) {
+      console.error('[Admin] Get invoice jobs error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/admin/invoices/jobs/:jobId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const job = automatedInvoiceService.getJobStatus(jobId);
+      
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      res.json(job);
+    } catch (error) {
+      console.error('[Admin] Get invoice job status error:', error);
       res.status(500).json({ message: (error as Error).message });
     }
   });
