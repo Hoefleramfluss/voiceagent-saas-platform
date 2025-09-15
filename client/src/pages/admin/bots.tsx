@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Bot, Activity, AlertCircle, CheckCircle, Clock, Zap } from "lucide-react";
+import { Plus, Bot, Activity, AlertCircle, CheckCircle, Clock, Zap, Edit } from "lucide-react";
 
 interface CreateBotData {
   name: string;
@@ -22,11 +22,14 @@ interface CreateBotData {
   sttProvider: string;
   ttsProvider: string;
   greetingMessage: string;
+  systemPrompt: string;
 }
 
 export default function AdminBots() {
   const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingBot, setEditingBot] = useState<any>(null);
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const [newBot, setNewBot] = useState<CreateBotData>({
     name: "",
@@ -34,26 +37,29 @@ export default function AdminBots() {
     locale: "en-US",
     sttProvider: "google",
     ttsProvider: "elevenlabs",
-    greetingMessage: "Hello! How can I help you today?"
+    greetingMessage: "Hello! How can I help you today?",
+    systemPrompt: "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
   });
 
   const { data: tenants } = useQuery<TenantsResponse>({
     queryKey: ["/api/tenants"],
   });
 
-  const { data: bots, isLoading } = useQuery<BotsResponse>({
-    queryKey: ["/api/bots"],
+  const { data: bots, isLoading, refetch } = useQuery<BotsResponse>({
+    queryKey: ["/api/bots", selectedTenant],
     queryFn: async () => {
       // For admin, we need to fetch bots for all tenants or specific tenant
-      const url = selectedTenant ? `/api/bots?tenantId=${selectedTenant}` : "/api/bots?tenantId=all";
+      if (!selectedTenant) {
+        return [];
+      }
+      const url = `/api/bots?tenantId=${selectedTenant}`;
       const response = await fetch(url, { credentials: "include" });
       if (!response.ok) {
-        // If no tenant selected, return empty array
-        return [];
+        throw new Error('Failed to fetch bots');
       }
       return response.json();
     },
-    enabled: false // We'll manually trigger this when tenant is selected
+    enabled: !!selectedTenant // Only fetch when tenant is selected
   });
 
   const createBotMutation = useMutation({
@@ -62,7 +68,7 @@ export default function AdminBots() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/bots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/bots", selectedTenant] });
       setIsCreateOpen(false);
       setNewBot({
         name: "",
@@ -70,11 +76,35 @@ export default function AdminBots() {
         locale: "en-US",
         sttProvider: "google",
         ttsProvider: "elevenlabs",
-        greetingMessage: "Hello! How can I help you today?"
+        greetingMessage: "Hello! How can I help you today?",
+        systemPrompt: "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
       });
       toast({
         title: "VoiceBot created",
         description: "New VoiceBot provisioning has been started.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateBotMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<CreateBotData> }) => {
+      const res = await apiRequest("PATCH", `/api/bots/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bots", selectedTenant] });
+      setIsEditOpen(false);
+      setEditingBot(null);
+      toast({
+        title: "VoiceBot updated",
+        description: "VoiceBot configuration has been updated.",
       });
     },
     onError: (error) => {
@@ -97,6 +127,30 @@ export default function AdminBots() {
       return;
     }
     createBotMutation.mutate(newBot);
+  };
+
+  const handleEditBot = (bot: any) => {
+    setEditingBot({
+      ...bot,
+      systemPrompt: bot.systemPrompt || "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
+    });
+    setIsEditOpen(true);
+  };
+
+  const handleUpdateBot = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBot) return;
+    
+    const updateData = {
+      name: editingBot.name,
+      locale: editingBot.locale,
+      sttProvider: editingBot.sttProvider,
+      ttsProvider: editingBot.ttsProvider,
+      greetingMessage: editingBot.greetingMessage,
+      systemPrompt: editingBot.systemPrompt
+    };
+    
+    updateBotMutation.mutate({ id: editingBot.id, data: updateData });
   };
 
   const getStatusIcon = (status: string) => {
@@ -251,6 +305,22 @@ export default function AdminBots() {
                     />
                   </div>
 
+                  <div className="space-y-2">
+                    <Label htmlFor="bot-system-prompt">System Prompt</Label>
+                    <Textarea
+                      id="bot-system-prompt"
+                      placeholder="You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries..."
+                      value={newBot.systemPrompt}
+                      onChange={(e) => setNewBot({ ...newBot, systemPrompt: e.target.value })}
+                      rows={5}
+                      data-testid="textarea-system-prompt"
+                      required
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Define the AI's personality, behavior, and capabilities. Be specific about how it should respond to users.
+                    </p>
+                  </div>
+
                   <div className="flex justify-end space-x-2">
                     <Button
                       type="button"
@@ -268,6 +338,146 @@ export default function AdminBots() {
                     </Button>
                   </div>
                 </form>
+              </DialogContent>
+            </Dialog>
+
+            {/* Edit Bot Dialog */}
+            <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Edit VoiceBot</DialogTitle>
+                  <DialogDescription>
+                    Update the VoiceBot configuration. Changes will be applied immediately.
+                  </DialogDescription>
+                </DialogHeader>
+                {editingBot && (
+                  <form onSubmit={handleUpdateBot} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-bot-name">Bot Name</Label>
+                        <Input
+                          id="edit-bot-name"
+                          placeholder="Customer Support Bot"
+                          value={editingBot.name}
+                          onChange={(e) => setEditingBot({ ...editingBot, name: e.target.value })}
+                          required
+                          data-testid="input-edit-bot-name"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-bot-customer">Customer</Label>
+                        <Input
+                          id="edit-bot-customer"
+                          value={tenants?.find(t => t.id === editingBot.tenantId)?.name || 'Unknown'}
+                          disabled
+                          className="opacity-50"
+                        />
+                        <p className="text-xs text-muted-foreground">Customer cannot be changed after creation</p>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-bot-locale">Language</Label>
+                        <Select
+                          value={editingBot.locale}
+                          onValueChange={(value) => setEditingBot({ ...editingBot, locale: value })}
+                        >
+                          <SelectTrigger data-testid="select-edit-locale">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="en-US">English (US)</SelectItem>
+                            <SelectItem value="en-GB">English (UK)</SelectItem>
+                            <SelectItem value="de-DE">German</SelectItem>
+                            <SelectItem value="fr-FR">French</SelectItem>
+                            <SelectItem value="es-ES">Spanish</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-bot-stt">Speech-to-Text</Label>
+                        <Select
+                          value={editingBot.sttProvider}
+                          onValueChange={(value) => setEditingBot({ ...editingBot, sttProvider: value })}
+                        >
+                          <SelectTrigger data-testid="select-edit-stt">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="google">Google STT</SelectItem>
+                            <SelectItem value="azure">Azure STT</SelectItem>
+                            <SelectItem value="aws">AWS Transcribe</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-bot-tts">Text-to-Speech</Label>
+                        <Select
+                          value={editingBot.ttsProvider}
+                          onValueChange={(value) => setEditingBot({ ...editingBot, ttsProvider: value })}
+                        >
+                          <SelectTrigger data-testid="select-edit-tts">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                            <SelectItem value="azure">Azure TTS</SelectItem>
+                            <SelectItem value="aws">AWS Polly</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-bot-greeting">Greeting Message</Label>
+                      <Textarea
+                        id="edit-bot-greeting"
+                        placeholder="Hello! How can I help you today?"
+                        value={editingBot.greetingMessage}
+                        onChange={(e) => setEditingBot({ ...editingBot, greetingMessage: e.target.value })}
+                        rows={3}
+                        data-testid="textarea-edit-greeting"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-bot-system-prompt">System Prompt</Label>
+                      <Textarea
+                        id="edit-bot-system-prompt"
+                        placeholder="You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries..."
+                        value={editingBot.systemPrompt}
+                        onChange={(e) => setEditingBot({ ...editingBot, systemPrompt: e.target.value })}
+                        rows={5}
+                        data-testid="textarea-edit-system-prompt"
+                        required
+                      />
+                      <p className="text-sm text-muted-foreground">
+                        Define the AI's personality, behavior, and capabilities. Be specific about how it should respond to users.
+                      </p>
+                    </div>
+
+                    <div className="flex justify-end space-x-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setIsEditOpen(false);
+                          setEditingBot(null);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={updateBotMutation.isPending}
+                        data-testid="button-update-bot-submit"
+                      >
+                        {updateBotMutation.isPending ? "Updating..." : "Update VoiceBot"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
               </DialogContent>
             </Dialog>
           </div>
@@ -476,6 +686,15 @@ export default function AdminBots() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              onClick={() => handleEditBot(bot)}
+                              data-testid={`button-edit-${bot.id}`}
+                            >
+                              <Edit className="w-4 h-4 mr-1" />
+                              Edit
+                            </Button>
                             {bot.status === 'ready' && (
                               <Button size="sm" variant="outline" data-testid={`button-test-${bot.id}`}>
                                 <Zap className="w-4 h-4 mr-1" />
