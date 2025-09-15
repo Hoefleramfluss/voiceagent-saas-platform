@@ -38,6 +38,8 @@ import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
+import { withDatabaseRetry } from "./retry-utils";
+import { createError } from "./error-handling";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -180,11 +182,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(insertUser)
-      .returning();
-    return user;
+    return await withDatabaseRetry(async () => {
+      const [user] = await db
+        .insert(users)
+        .values(insertUser)
+        .returning();
+      if (!user) {
+        throw createError.database('Failed to create user');
+      }
+      return user;
+    }, 'createUser');
   }
 
   async updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User> {
@@ -209,11 +216,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTenant(insertTenant: InsertTenant): Promise<Tenant> {
-    const [tenant] = await db
-      .insert(tenants)
-      .values(insertTenant)
-      .returning();
-    return tenant;
+    return await withDatabaseRetry(async () => {
+      const [tenant] = await db
+        .insert(tenants)
+        .values(insertTenant)
+        .returning();
+      if (!tenant) {
+        throw createError.database('Failed to create tenant');
+      }
+      return tenant;
+    }, 'createTenant');
   }
 
   async updateTenant(id: string, updates: Partial<Tenant>): Promise<Tenant> {
