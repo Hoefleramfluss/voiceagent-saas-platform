@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
 // Simple test runner for enterprise tests
-const { runAllEnterpriseTests } = require('./server/enterprise-tests.ts');
+import { runAllEnterpriseTests } from './server/enterprise-tests.ts';
 
 async function runTests() {
   console.log('🔄 Starting Enterprise Test Suite...');
-  console.log('=' * 60);
+  console.log('='.repeat(60));
   
   try {
     const report = await runAllEnterpriseTests();
     
     console.log('\n📊 ENTERPRISE TEST RESULTS');
-    console.log('=' * 60);
+    console.log('='.repeat(60));
     
     // Display summary
     const { summary } = report;
@@ -24,7 +24,7 @@ async function runTests() {
     
     // Display detailed results by suite
     console.log('\n📋 DETAILED RESULTS BY SUITE');
-    console.log('=' * 60);
+    console.log('='.repeat(60));
     
     report.suites.forEach(suite => {
       console.log(`\n${suite.suiteName}: ${suite.passedTests}/${suite.totalTests} passed`);
@@ -55,8 +55,4 @@ async function runTests() {
 }
 
 // Run tests if this script is executed directly
-if (require.main === module) {
-  runTests();
-}
-
-module.exports = { runTests };
+runTests();
