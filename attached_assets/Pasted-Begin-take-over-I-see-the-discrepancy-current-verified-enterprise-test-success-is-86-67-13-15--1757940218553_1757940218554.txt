@@ -1,0 +1,30 @@
+Begin take over.
+I see the discrepancy: current verified enterprise test success is 86.67% (13/15), not 100%. Please finish production readiness by fixing the final blockers, re-running all tests, and reporting PASS with evidence. You may spawn sub-agents. Do not expose secrets.
+1) Phone E.164 Validation & Normalization (FINAL BLOCKER)
+Implement strict, region-aware E.164 parsing/formatting using libphonenumber(-js).
+Accept valid examples per region (e.g. AT: +4312345678, DE: +4930123456, US: +15551234567).
+Persist only normalized E.164; reject non-normalizable inputs with clear 4xx errors.
+Enforce at boundaries: API input, Twilio webhook routing, phone mapping CRUD.
+DB migration: normalize existing rows; add unique constraint for active number per tenant; add CHECK to ensure E.164.
+Update tests to use valid regional numbers; remove any invalid fixtures (e.g. +12121234567).
+Provide a short matrix showing which numbers were accepted/rejected and why.
+2) Test Infrastructure & DB Cleanup
+Eliminate foreign-key/duplicate failures by adding transactional test isolation (per test or per suite) and a FK-safe truncation routine (correct table order or TRUNCATE … CASCADE in a dedicated test schema).
+Ensure tests never leak state between runs; add teardown hooks.
+Re-run enterprise suites until green.
+3) Connector API Enforcement (verify)
+Require tenantId on all connector calls and OAuth callbacks; enforce nonce persistence and provider binding validation.
+Add/expand tests: wrong tenant → 403, missing nonce/state → 400/403, happy path calendar create → 200.
+4) Full Regression & Acceptance
+Target ≥ 95% (aim 100%) enterprise test pass.
+Health: /api/health shows database/redis/stripe = "operational".
+Twilio routing: simulate two tenants; verify number → correct tenant → live flow.
+Billing: simulate voicebot + transfer minutes; aggregator deducts free minutes; invoice payload correct.
+UI: Admin ABRECHNUNGEN loads; no Select.Item empty value errors; “clear” uses "all".
+Localization: default German remains intact.
+Security: WAF allows legit /admin assets, blocks exploit patterns; IPv6-safe rate limits emit metrics.
+Stripe: frontend pk_ only; backend sk_; no browser console errors; webhook test green.
+Deliverables
+PR(s) with migrations and code, test report (PASS/FAIL per suite), short release notes, and updated README/RUNBOOK.
+Brief security note confirming tenant isolation, connector enforcement, E.164 constraints, and logging hygiene.
+If any check fails, auto-fix and re-run until PASS. Report back with the final PASS summary and artifact links.
