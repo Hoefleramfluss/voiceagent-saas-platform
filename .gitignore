@@ -3,5 +3,12 @@ dist
 .DS_Store
 server/public
 vite.config.ts.*
-*.tar.gz*.txt
-cookies*.txt
+
+# Security - Session and cookie files (CRITICAL)
+*.txt
+*cookies*
+*session*
+auth-cookies.txt
+demo-cookies.txt
+tenant-cookies.txt
+global-admin-cookies.txt
