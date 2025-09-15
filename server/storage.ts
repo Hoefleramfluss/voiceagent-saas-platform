@@ -39,7 +39,10 @@ import {
   type Flow,
   type InsertFlow,
   type FlowVersion,
-  type InsertFlowVersion
+  type InsertFlowVersion,
+  phoneNumberMappings,
+  type PhoneNumberMapping,
+  type InsertPhoneNumberMapping
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -48,6 +51,7 @@ import connectPg from "connect-pg-simple";
 import { pool } from "./db";
 import { withDatabaseRetry } from "./retry-utils";
 import { createError } from "./error-handling";
+import { normalizePhoneNumber, validateBotOwnership, validatePhoneNumberFormat } from "./phone-security-utils";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -185,6 +189,14 @@ export interface IStorage {
   updateFlowVersion(id: string, tenantId: string, updates: Partial<FlowVersion>): Promise<FlowVersion>;
   publishFlowVersion(id: string, tenantId: string, publishedBy: string): Promise<FlowVersion>;
   archiveFlowVersion(id: string, tenantId: string): Promise<FlowVersion>;
+
+  // Phone number mapping operations
+  getPhoneNumberMappings(tenantId: string): Promise<PhoneNumberMapping[]>;
+  getPhoneNumberMapping(id: string, tenantId: string): Promise<PhoneNumberMapping | undefined>;
+  getPhoneNumberMappingByPhone(phoneNumber: string): Promise<PhoneNumberMapping | undefined>;
+  createPhoneNumberMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping>;
+  updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping>;
+  deletePhoneNumberMapping(id: string, tenantId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1105,6 +1117,134 @@ export class DatabaseStorage implements IStorage {
       
       return version;
     }, 'archiveFlowVersion');
+  }
+
+  // Phone number mapping operations
+  async getPhoneNumberMappings(tenantId: string): Promise<PhoneNumberMapping[]> {
+    return await withDatabaseRetry(async () => {
+      return await db
+        .select()
+        .from(phoneNumberMappings)
+        .where(eq(phoneNumberMappings.tenantId, tenantId))
+        .orderBy(desc(phoneNumberMappings.createdAt));
+    }, 'getPhoneNumberMappings');
+  }
+
+  async getPhoneNumberMapping(id: string, tenantId: string): Promise<PhoneNumberMapping | undefined> {
+    return await withDatabaseRetry(async () => {
+      const [mapping] = await db
+        .select()
+        .from(phoneNumberMappings)
+        .where(and(
+          eq(phoneNumberMappings.id, id),
+          eq(phoneNumberMappings.tenantId, tenantId)
+        ));
+      return mapping || undefined;
+    }, 'getPhoneNumberMapping');
+  }
+
+  async getPhoneNumberMappingByPhone(phoneNumber: string): Promise<PhoneNumberMapping | undefined> {
+    return await withDatabaseRetry(async () => {
+      // SECURITY: Normalize phone number to E.164 for consistent lookup
+      const normalizedPhone = normalizePhoneNumber(phoneNumber);
+      
+      const [mapping] = await db
+        .select()
+        .from(phoneNumberMappings)
+        .where(and(
+          eq(phoneNumberMappings.phoneNumber, normalizedPhone),
+          eq(phoneNumberMappings.isActive, true)
+        ))
+        .orderBy(phoneNumberMappings.createdAt); // Deterministic ordering for consistency
+      return mapping || undefined;
+    }, 'getPhoneNumberMappingByPhone');
+  }
+
+  async createPhoneNumberMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping> {
+    return await withDatabaseRetry(async () => {
+      // SECURITY: Validate phone number format
+      validatePhoneNumberFormat(mapping.phoneNumber);
+      
+      // SECURITY: Normalize phone number to E.164 format
+      const normalizedPhoneNumber = normalizePhoneNumber(mapping.phoneNumber);
+      
+      // CRITICAL SECURITY: Validate bot ownership to prevent cross-tenant bot binding
+      if (mapping.botId) {
+        await validateBotOwnership(mapping.botId, mapping.tenantId);
+      }
+      
+      const [newMapping] = await db
+        .insert(phoneNumberMappings)
+        .values({
+          ...mapping,
+          phoneNumber: normalizedPhoneNumber
+        })
+        .returning();
+      
+      if (!newMapping) {
+        throw createError.database('Failed to create phone number mapping');
+      }
+      
+      return newMapping;
+    }, 'createPhoneNumberMapping');
+  }
+
+  async updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping> {
+    return await withDatabaseRetry(async () => {
+      // Whitelist safe fields to prevent tenant ownership transfer
+      const safeFields = ['botId', 'webhookUrl', 'isActive'] as const;
+      const safeUpdates: Partial<PhoneNumberMapping> = {};
+      
+      for (const field of safeFields) {
+        if (field in updates && updates[field] !== undefined) {
+          (safeUpdates as any)[field] = updates[field];
+        }
+      }
+      
+      // Reject if forbidden fields are attempted
+      const forbiddenFields = ['id', 'phoneNumber', 'tenantId', 'createdAt'];
+      for (const field of forbiddenFields) {
+        if (field in updates) {
+          throw createError.badRequest(`Cannot update immutable field: ${field}`);
+        }
+      }
+      
+      // CRITICAL SECURITY: If updating botId, validate bot ownership to prevent cross-tenant bot binding
+      if (safeUpdates.botId) {
+        await validateBotOwnership(safeUpdates.botId, tenantId);
+      }
+      
+      const [mapping] = await db
+        .update(phoneNumberMappings)
+        .set({ ...safeUpdates, updatedAt: new Date() })
+        .where(and(
+          eq(phoneNumberMappings.id, id),
+          eq(phoneNumberMappings.tenantId, tenantId)
+        ))
+        .returning();
+      
+      if (!mapping) {
+        throw createError.notFound('Phone number mapping not found or access denied');
+      }
+      
+      return mapping;
+    }, 'updatePhoneNumberMapping');
+  }
+
+  async deletePhoneNumberMapping(id: string, tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      const result = await db
+        .delete(phoneNumberMappings)
+        .where(and(
+          eq(phoneNumberMappings.id, id),
+          eq(phoneNumberMappings.tenantId, tenantId)
+        ))
+        .returning();
+      
+      if (result.length === 0) {
+        throw createError.notFound('Phone number mapping not found or access denied');
+      }
+    }, 'deletePhoneNumberMapping');
   }
 }
 
