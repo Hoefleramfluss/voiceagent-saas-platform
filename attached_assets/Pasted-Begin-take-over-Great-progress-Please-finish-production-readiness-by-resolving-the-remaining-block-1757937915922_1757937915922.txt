@@ -1,0 +1,26 @@
+Begin take over.
+Great progress. Please finish production readiness by resolving the remaining blockers, then run a full test pass and deliver artifacts. You may spawn sub-agents if useful. Do not expose secrets.
+1) Phone E.164 validation (FINAL BLOCKER)
+Implement strict, region-aware E.164 parsing/formatting (use libphonenumber or equivalent).
+Support AT and international numbers; persist normalized E.164 only.
+Enforce at all boundaries: API input, Twilio webhooks, phone mapping CRUD.
+DB constraints: unique active number per tenant; add migration + backfill existing numbers.
+Tests: valid/invalid numbers (AT, DE, US), re-assignment, cross-tenant negative cases.
+2) Connector API enforcement (FINAL BLOCKER)
+Require tenantId for all connector operations (service + adapters + routes + OAuth callbacks).
+Persist/validate nonce for replay protection; verify provider binding on callback.
+Strengthen config validation (fail fast on missing scopes/redirects).
+Tests: connector calls without tenant → 403; wrong tenant binding → 403; happy path calendar create succeeds.
+3) Full verification & regression
+Re-run enterprise tests → target ≥ 95% pass (aim 100%).
+Health: /api/health → database/redis/stripe operational.
+Twilio routing: simulate inbound for two tenants; verify correct live flow.
+Billing: simulate bot + transfer minutes; aggregator deducts free minutes; invoice payload correct.
+UI: Admin ABRECHNUNGEN loads; Select.Item values non-empty (use "all" to clear).
+Localization: default German labels/messages on admin/customer UIs.
+Security: WAF allows legit /admin assets; blocks exploit patterns; IPv6-safe rate limits emitting metrics.
+Stripe: frontend pk_ only; backend sk_; no browser console errors; webhook test green.
+Deliverables
+PR(s) with migrations and code, test results (PASS/FAIL per suite), short release notes, and updated README/RUNBOOK.
+Brief security note confirming tenant isolation, connector enforcement, E.164 constraints, and logging hygiene.
+Report back with a concise PASS report and links to artifacts. If any check fails, auto-fix and re-run until PASS.
