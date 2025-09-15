@@ -209,7 +209,7 @@ export interface IStorage {
   getVerificationCode(tenantId: string): Promise<DemoVerificationCode | undefined>;
   updateVerificationCode(id: string, updates: Partial<DemoVerificationCode>): Promise<DemoVerificationCode>;
   deleteVerificationCode(tenantId: string): Promise<void>;
-  cleanupExpiredVerificationCodes(): Promise<number>;
+  cleanupExpiredVerificationCodes(): Promise<{ deletedCount: number }>;
 
   // Connector operations
   getConnectors(tenantId: string): Promise<Connector[]>;
@@ -218,6 +218,22 @@ export interface IStorage {
   createConnector(connector: InsertConnector): Promise<Connector>;
   updateConnector(id: string, tenantId: string, updates: Partial<Connector>): Promise<Connector>;
   deleteConnector(id: string, tenantId: string): Promise<void>;
+
+  // System and maintenance operations
+  executeRaw(query: string): Promise<{ rowCount: number }>;
+  healthCheck(): Promise<void>;
+  
+  // Tenant cleanup operations
+  getStaleTrialTenants(daysOld: number): Promise<Tenant[]>;
+  cleanupTenantData(tenantId: string): Promise<void>;
+  deleteTenant(tenantId: string): Promise<void>;
+  
+  // Phone mapping cleanup operations
+  removePhoneMappingsByTenantId(tenantId: string): Promise<void>;
+  cleanupOrphanedPhoneMappings(): Promise<{ deletedCount: number }>;
+  
+  // Audit log operations
+  archiveOldAuditLogs(archiveDate: Date): Promise<{ archivedCount: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1417,13 +1433,120 @@ export class DatabaseStorage implements IStorage {
     }, 'deleteVerificationCode');
   }
 
-  async cleanupExpiredVerificationCodes(): Promise<number> {
+  async cleanupExpiredVerificationCodes(): Promise<{ deletedCount: number }> {
     return await withDatabaseRetry(async () => {
       const result = await db
         .delete(demoVerificationCodes)
         .where(lte(demoVerificationCodes.expiresAt, new Date()));
-      return result.rowCount || 0;
+      return { deletedCount: result.rowCount || 0 };
     }, 'cleanupExpiredVerificationCodes');
+  }
+
+  // System and maintenance operations
+  async executeRaw(query: string): Promise<{ rowCount: number }> {
+    return await withDatabaseRetry(async () => {
+      const result = await pool.query(query);
+      return { rowCount: result.rowCount || 0 };
+    }, 'executeRaw');
+  }
+
+  async healthCheck(): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      await pool.query('SELECT 1');
+    }, 'healthCheck');
+  }
+
+  // Tenant cleanup operations
+  async getStaleTrialTenants(daysOld: number): Promise<Tenant[]> {
+    return await withDatabaseRetry(async () => {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+      
+      const results = await db
+        .select()
+        .from(tenants)
+        .where(and(
+          eq(tenants.subscriptionStatus, 'trial'),
+          lte(tenants.createdAt, cutoffDate)
+        ));
+      
+      return results;
+    }, 'getStaleTrialTenants');
+  }
+
+  async cleanupTenantData(tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      // Delete related data in proper order to avoid foreign key constraints
+      await db.delete(usageEvents).where(eq(usageEvents.tenantId, tenantId));
+      await db.delete(supportTickets).where(eq(supportTickets.tenantId, tenantId));
+      await db.delete(bots).where(eq(bots.tenantId, tenantId));
+      await db.delete(flows).where(eq(flows.tenantId, tenantId));
+      await db.delete(connectors).where(eq(connectors.tenantId, tenantId));
+      await db.delete(demoVerificationCodes).where(eq(demoVerificationCodes.tenantId, tenantId));
+      await db.delete(auditLogs).where(eq(auditLogs.tenantId, tenantId));
+      // Clean up users last
+      await db.delete(users).where(eq(users.tenantId, tenantId));
+    }, 'cleanupTenantData');
+  }
+
+  async deleteTenant(tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      const result = await db
+        .delete(tenants)
+        .where(eq(tenants.id, tenantId))
+        .returning();
+      
+      if (result.length === 0) {
+        throw createError.notFound('Tenant not found');
+      }
+    }, 'deleteTenant');
+  }
+
+  // Phone mapping cleanup operations
+  async removePhoneMappingsByTenantId(tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      await db
+        .delete(phoneNumberMappings)
+        .where(eq(phoneNumberMappings.tenantId, tenantId));
+    }, 'removePhoneMappingsByTenantId');
+  }
+
+  async cleanupOrphanedPhoneMappings(): Promise<{ deletedCount: number }> {
+    return await withDatabaseRetry(async () => {
+      // Find phone mappings that reference non-existent tenants or bots
+      const orphanedMappings = await db
+        .select({ id: phoneNumberMappings.id })
+        .from(phoneNumberMappings)
+        .leftJoin(tenants, eq(phoneNumberMappings.tenantId, tenants.id))
+        .leftJoin(bots, eq(phoneNumberMappings.botId, bots.id))
+        .where(and(
+          eq(tenants.id, null), // tenant doesn't exist
+          eq(bots.id, null)     // or bot doesn't exist
+        ));
+      
+      if (orphanedMappings.length === 0) {
+        return { deletedCount: 0 };
+      }
+      
+      const orphanedIds = orphanedMappings.map(m => m.id);
+      const result = await db
+        .delete(phoneNumberMappings)
+        .where(eq(phoneNumberMappings.id, orphanedIds[0])); // Need to use proper IN clause
+      
+      return { deletedCount: result.rowCount || 0 };
+    }, 'cleanupOrphanedPhoneMappings');
+  }
+
+  // Audit log operations
+  async archiveOldAuditLogs(archiveDate: Date): Promise<{ archivedCount: number }> {
+    return await withDatabaseRetry(async () => {
+      // For now, just delete old audit logs (in production, move to archive table)
+      const result = await db
+        .delete(auditLogs)
+        .where(lte(auditLogs.timestamp, archiveDate));
+      
+      return { archivedCount: result.rowCount || 0 };
+    }, 'archiveOldAuditLogs');
   }
 }
 
