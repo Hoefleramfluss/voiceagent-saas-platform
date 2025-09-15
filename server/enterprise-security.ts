@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { storage } from './storage';
 
 /**
@@ -92,14 +92,16 @@ export const rateLimitMetrics = new EnterpriseRateLimitMetrics();
 /**
  * Multi-dimensional key generator for enhanced rate limiting
  * Combines IP, tenant, phone, and user identifiers for granular control
+ * Uses IPv6-safe IP key generation for security compliance
  */
 export function enterpriseKeyGenerator(dimensions: Array<'ip' | 'tenant' | 'phone' | 'user'>) {
   return (req: ExtendedRequest): string => {
     const keyParts: string[] = [];
     
     if (dimensions.includes('ip')) {
-      const ip = req.ip || req.connection.remoteAddress || 'unknown';
-      keyParts.push(`ip:${ip}`);
+      // SECURITY: Use IPv6-safe IP key generator for proper rate limiting
+      const ipKey = ipKeyGenerator(req);
+      keyParts.push(`ip:${ipKey}`);
     }
     
     if (dimensions.includes('tenant')) {
@@ -166,6 +168,7 @@ export function createSuccessHandler(limitType: string, dimensions: Array<'ip' |
 /**
  * Enterprise Demo Tenant Rate Limiting
  * Multi-dimensional protection against abuse
+ * Uses IPv6-safe IP key generation
  */
 export const enterpriseDemoRateLimit = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
@@ -178,7 +181,12 @@ export const enterpriseDemoRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: enterpriseKeyGenerator(['ip', 'phone']), // Combine IP and phone
+  keyGenerator: (req: ExtendedRequest): string => {
+    // SECURITY: Use IPv6-safe IP key generator + phone for multi-dimensional limiting
+    const ipKey = ipKeyGenerator(req);
+    const phone = req.body?.contactPhone || req.body?.phone || req.query?.phone || 'no-phone';
+    return `ip:${ipKey}|phone:${phone}`;
+  },
   handler: createEnterpriseHandler('demo-creation', ['ip', 'phone']),
   skipSuccessfulRequests: false,
   skipFailedRequests: false
@@ -187,6 +195,7 @@ export const enterpriseDemoRateLimit = rateLimit({
 /**
  * Enterprise Phone Verification Rate Limiting
  * Per-phone and per-IP protection
+ * Uses IPv6-safe IP key generation
  */
 export const enterprisePhoneVerificationRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -199,7 +208,12 @@ export const enterprisePhoneVerificationRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: enterpriseKeyGenerator(['phone', 'ip']), // Phone-first, then IP
+  keyGenerator: (req: ExtendedRequest): string => {
+    // SECURITY: Use IPv6-safe IP key generator + phone for multi-dimensional limiting
+    const ipKey = ipKeyGenerator(req);
+    const phone = req.body?.contactPhone || req.body?.phone || req.query?.phone || 'no-phone';
+    return `phone:${phone}|ip:${ipKey}`;
+  },
   handler: createEnterpriseHandler('phone-verification', ['phone', 'ip']),
   skipSuccessfulRequests: true, // Only count failed attempts
   skipFailedRequests: false
@@ -208,6 +222,7 @@ export const enterprisePhoneVerificationRateLimit = rateLimit({
 /**
  * Enterprise Auth Rate Limiting
  * Per-tenant and per-IP protection
+ * Uses IPv6-safe IP key generation
  */
 export const enterpriseAuthRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -219,7 +234,12 @@ export const enterpriseAuthRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: enterpriseKeyGenerator(['ip', 'tenant']), // IP and tenant combination
+  keyGenerator: (req: ExtendedRequest): string => {
+    // SECURITY: Use IPv6-safe IP key generator + tenant for multi-dimensional limiting
+    const ipKey = ipKeyGenerator(req);
+    const tenantId = req.tenant?.id || req.user?.tenantId || 'no-tenant';
+    return `ip:${ipKey}|tenant:${tenantId}`;
+  },
   handler: createEnterpriseHandler('authentication', ['ip', 'tenant']),
   skipSuccessfulRequests: true, // Only count failed attempts
   skipFailedRequests: false
@@ -240,10 +260,11 @@ export const enterpriseWebhookRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req: ExtendedRequest): string => {
-    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    // SECURITY: Use IPv6-safe IP key generator for webhook rate limiting
+    const ipKey = ipKeyGenerator(req);
     const signature = req.headers['stripe-signature'] || req.headers['x-twilio-signature'] || '';
     const tenantId = req.tenant?.id || 'no-tenant';
-    return `webhook:${ip}:${tenantId}:${signature.slice(0, 10)}`;
+    return `webhook:${ipKey}:${tenantId}:${signature.slice(0, 10)}`;
   },
   handler: createEnterpriseHandler('webhook', ['ip', 'tenant']),
   skipSuccessfulRequests: false,
@@ -264,7 +285,12 @@ export const enterpriseAdminRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: enterpriseKeyGenerator(['user', 'ip']), // User-specific limiting
+  keyGenerator: (req: ExtendedRequest): string => {
+    // SECURITY: Use IPv6-safe IP key generator + user for multi-dimensional limiting
+    const ipKey = ipKeyGenerator(req);
+    const userId = req.user?.id || 'anonymous';
+    return `user:${userId}|ip:${ipKey}`;
+  },
   handler: createEnterpriseHandler('admin-operations', ['user', 'ip']),
   skip: (req) => {
     // Skip GET requests, only limit state-changing operations
@@ -286,7 +312,13 @@ export const enterpriseBillingRateLimit = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: enterpriseKeyGenerator(['tenant', 'user', 'ip']), // Tenant-first limiting
+  keyGenerator: (req: ExtendedRequest): string => {
+    // SECURITY: Use IPv6-safe IP key generator + tenant/user for multi-dimensional limiting
+    const ipKey = ipKeyGenerator(req);
+    const tenantId = req.tenant?.id || req.user?.tenantId || 'no-tenant';
+    const userId = req.user?.id || 'anonymous';
+    return `tenant:${tenantId}|user:${userId}|ip:${ipKey}`;
+  },
   handler: createEnterpriseHandler('billing-operations', ['tenant', 'user', 'ip']),
   skipSuccessfulRequests: false,
   skipFailedRequests: false
