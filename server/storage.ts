@@ -707,7 +707,7 @@ export class DatabaseStorage implements IStorage {
     if (!validEventTypes.includes(eventType as string)) {
       console.warn(`[AUDIT] Invalid eventType '${eventType}' normalized to 'sensitive_operation'`);
       // Record original for debugging
-      metadata = { ...metadata, originalEventType: eventType };
+      metadata = { ...(metadata as object || {}), originalEventType: eventType };
       eventType = 'sensitive_operation' as any;
       operation = operation || 'UNKNOWN';
     }

@@ -2480,8 +2480,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             '<Response><Say voice="alice">Service temporarily unavailable. Please try again later.</Say></Response>'
           );
         }
-        bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId!);
-        tenant = await storage.getTenant(phoneMapping.tenantId!);
+        const tenantId = phoneMapping.tenantId as string; // Already null-checked above
+        bot = await storage.getBot(phoneMapping.botId, tenantId);
+        tenant = await storage.getTenant(tenantId);
         
         if (!bot || !tenant) {
           console.error('[TwilioWebhook] Bot or tenant not found:', { botId: phoneMapping.botId, tenantId: phoneMapping.tenantId });
@@ -2597,8 +2598,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               console.warn('[TwilioWebhook] Phone mapping missing tenantId for status update');
               // Continue without bot/tenant context
             } else {
-              bot = await storage.getBot(phoneMapping.botId, phoneMapping.tenantId!);
-              tenant = await storage.getTenant(phoneMapping.tenantId!);
+              const tenantId = phoneMapping.tenantId as string; // Already null-checked above
+              bot = await storage.getBot(phoneMapping.botId, tenantId);
+              tenant = await storage.getTenant(tenantId);
             }
           }
         } catch (error) {
