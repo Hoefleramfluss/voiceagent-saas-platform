@@ -12,6 +12,8 @@ import {
   subscriptionPlans,
   invoiceJobs,
   tenantSettings,
+  flows,
+  flowVersions,
   type Tenant,
   type User, 
   type InsertUser, 
@@ -33,7 +35,11 @@ import {
   type SubscriptionPlan,
   type InvoiceJob,
   type InsertInvoiceJob,
-  type TenantSettings
+  type TenantSettings,
+  type Flow,
+  type InsertFlow,
+  type FlowVersion,
+  type InsertFlowVersion
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -163,6 +169,22 @@ export interface IStorage {
     plan: SubscriptionPlan | null;
     billingAccount: any;
   }>;
+
+  // Flow operations
+  getFlows(tenantId: string): Promise<Flow[]>;
+  getFlow(id: string, tenantId: string): Promise<Flow | undefined>;
+  createFlow(flow: InsertFlow): Promise<Flow>;
+  updateFlow(id: string, tenantId: string, updates: Partial<Flow>): Promise<Flow>;
+  deleteFlow(id: string, tenantId: string): Promise<void>;
+
+  // Flow version operations with versioning workflow
+  getFlowVersions(flowId: string, tenantId: string): Promise<FlowVersion[]>;
+  getFlowVersion(id: string, tenantId: string): Promise<FlowVersion | undefined>;
+  getFlowVersionByStatus(flowId: string, status: 'draft' | 'staged' | 'live', tenantId: string): Promise<FlowVersion | undefined>;
+  createFlowVersion(version: InsertFlowVersion, tenantId: string): Promise<FlowVersion>;
+  updateFlowVersion(id: string, tenantId: string, updates: Partial<FlowVersion>): Promise<FlowVersion>;
+  publishFlowVersion(id: string, tenantId: string, publishedBy: string): Promise<FlowVersion>;
+  archiveFlowVersion(id: string, tenantId: string): Promise<FlowVersion>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -736,6 +758,353 @@ export class DatabaseStorage implements IStorage {
     }
     
     return { plan, billingAccount };
+  }
+
+  // Flow operations with tenant isolation
+  async getFlows(tenantId: string): Promise<Flow[]> {
+    return await db
+      .select()
+      .from(flows)
+      .where(eq(flows.tenantId, tenantId))
+      .orderBy(desc(flows.createdAt));
+  }
+
+  async getFlow(id: string, tenantId: string): Promise<Flow | undefined> {
+    // Security: Always require tenant context to prevent cross-tenant access
+    const [flow] = await db.select()
+      .from(flows)
+      .where(and(eq(flows.id, id), eq(flows.tenantId, tenantId)));
+    return flow || undefined;
+  }
+
+  async createFlow(insertFlow: InsertFlow): Promise<Flow> {
+    return await withDatabaseRetry(async () => {
+      const [flow] = await db
+        .insert(flows)
+        .values(insertFlow)
+        .returning();
+      if (!flow) {
+        throw createError.database('Failed to create flow');
+      }
+      return flow;
+    }, 'createFlow');
+  }
+
+  async updateFlow(id: string, tenantId: string, updates: Partial<Flow>): Promise<Flow> {
+    return await withDatabaseRetry(async () => {
+      // Security: Define immutable fields that cannot be updated
+      const immutableFields = ['id', 'tenantId', 'createdAt'];
+      
+      // Security: Check for forbidden field updates
+      for (const field of immutableFields) {
+        if (updates.hasOwnProperty(field)) {
+          throw createError.validation(`Cannot update immutable field: ${field}`);
+        }
+      }
+      
+      // Security: Only allow safe fields to be updated
+      const safeFields = ['name', 'description', 'status', 'metadata', 'updatedAt'];
+      const sanitizedUpdates: any = { updatedAt: new Date() };
+      
+      for (const [key, value] of Object.entries(updates)) {
+        if (safeFields.includes(key)) {
+          sanitizedUpdates[key] = value;
+        } else {
+          throw createError.validation(`Field '${key}' is not allowed to be updated`);
+        }
+      }
+      
+      const [flow] = await db
+        .update(flows)
+        .set(sanitizedUpdates)
+        .where(and(eq(flows.id, id), eq(flows.tenantId, tenantId)))
+        .returning();
+      
+      if (!flow) {
+        throw createError.notFound('Flow not found or access denied');
+      }
+      return flow;
+    }, 'updateFlow');
+  }
+
+  async deleteFlow(id: string, tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      const result = await db
+        .delete(flows)
+        .where(and(eq(flows.id, id), eq(flows.tenantId, tenantId)))
+        .returning({ id: flows.id });
+      
+      if (result.length === 0) {
+        throw createError.notFound('Flow not found or access denied');
+      }
+    }, 'deleteFlow');
+  }
+
+  // Flow version operations with versioning workflow
+  async getFlowVersions(flowId: string, tenantId: string): Promise<FlowVersion[]> {
+    return await withDatabaseRetry(async () => {
+      // First validate that the flow belongs to the requesting tenant
+      const flowExists = await db
+        .select({ id: flows.id })
+        .from(flows)
+        .where(and(eq(flows.id, flowId), eq(flows.tenantId, tenantId)))
+        .limit(1);
+      
+      if (flowExists.length === 0) {
+        throw createError.notFound('Flow not found or access denied');
+      }
+      
+      // Now fetch versions for the validated flow
+      return await db
+        .select({
+          id: flowVersions.id,
+          flowId: flowVersions.flowId,
+          version: flowVersions.version,
+          status: flowVersions.status,
+          content: flowVersions.content,
+          metadata: flowVersions.metadata,
+          publishedAt: flowVersions.publishedAt,
+          publishedBy: flowVersions.publishedBy,
+          createdAt: flowVersions.createdAt,
+          updatedAt: flowVersions.updatedAt
+        })
+        .from(flowVersions)
+        .innerJoin(flows, eq(flowVersions.flowId, flows.id))
+        .where(and(
+          eq(flowVersions.flowId, flowId),
+          eq(flows.tenantId, tenantId)
+        ))
+        .orderBy(desc(flowVersions.version));
+    }, 'getFlowVersions');
+  }
+
+  async getFlowVersion(id: string, tenantId: string): Promise<FlowVersion | undefined> {
+    const [version] = await db
+      .select({
+        id: flowVersions.id,
+        flowId: flowVersions.flowId,
+        version: flowVersions.version,
+        status: flowVersions.status,
+        content: flowVersions.content,
+        metadata: flowVersions.metadata,
+        publishedAt: flowVersions.publishedAt,
+        publishedBy: flowVersions.publishedBy,
+        createdAt: flowVersions.createdAt,
+        updatedAt: flowVersions.updatedAt
+      })
+      .from(flowVersions)
+      .innerJoin(flows, eq(flowVersions.flowId, flows.id))
+      .where(and(
+        eq(flowVersions.id, id),
+        eq(flows.tenantId, tenantId)
+      ));
+    return version || undefined;
+  }
+
+  async getFlowVersionByStatus(flowId: string, status: 'draft' | 'staged' | 'live', tenantId: string): Promise<FlowVersion | undefined> {
+    return await withDatabaseRetry(async () => {
+      // Validate that the flow belongs to the requesting tenant
+      const [version] = await db
+        .select({
+          id: flowVersions.id,
+          flowId: flowVersions.flowId,
+          version: flowVersions.version,
+          status: flowVersions.status,
+          content: flowVersions.content,
+          metadata: flowVersions.metadata,
+          publishedAt: flowVersions.publishedAt,
+          publishedBy: flowVersions.publishedBy,
+          createdAt: flowVersions.createdAt,
+          updatedAt: flowVersions.updatedAt
+        })
+        .from(flowVersions)
+        .innerJoin(flows, eq(flowVersions.flowId, flows.id))
+        .where(and(
+          eq(flowVersions.flowId, flowId),
+          eq(flowVersions.status, status),
+          eq(flows.tenantId, tenantId)
+        ))
+        .limit(1);
+      
+      return version || undefined;
+    }, 'getFlowVersionByStatus');
+  }
+
+  async createFlowVersion(insertVersion: InsertFlowVersion, tenantId: string): Promise<FlowVersion> {
+    return await withDatabaseRetry(async () => {
+      // First validate that the flow belongs to the requesting tenant
+      const flowExists = await db
+        .select({ id: flows.id })
+        .from(flows)
+        .where(and(eq(flows.id, insertVersion.flowId), eq(flows.tenantId, tenantId)))
+        .limit(1);
+      
+      if (flowExists.length === 0) {
+        throw createError.notFound('Flow not found or access denied');
+      }
+      
+      // Now create the version for the validated flow
+      const [version] = await db
+        .insert(flowVersions)
+        .values(insertVersion)
+        .returning();
+        
+      if (!version) {
+        throw createError.database('Failed to create flow version');
+      }
+      return version;
+    }, 'createFlowVersion');
+  }
+
+  async updateFlowVersion(id: string, tenantId: string, updates: Partial<FlowVersion>): Promise<FlowVersion> {
+    return await withDatabaseRetry(async () => {
+      // First validate tenant ownership through flow
+      const flowVersionWithFlow = await db
+        .select({ flowId: flowVersions.flowId, flowTenantId: flows.tenantId })
+        .from(flowVersions)
+        .innerJoin(flows, eq(flowVersions.flowId, flows.id))
+        .where(eq(flowVersions.id, id))
+        .limit(1);
+      
+      if (flowVersionWithFlow.length === 0) {
+        throw createError.notFound('Flow version not found');
+      }
+      
+      if (flowVersionWithFlow[0].flowTenantId !== tenantId) {
+        throw createError.notFound('Flow version not found or access denied');
+      }
+      
+      // Security: Define immutable fields that cannot be updated
+      const immutableFields = ['id', 'flowId', 'version', 'status', 'publishedAt', 'publishedBy', 'createdAt'];
+      
+      // Security: Check for forbidden field updates
+      for (const field of immutableFields) {
+        if (updates.hasOwnProperty(field)) {
+          throw createError.validation(`Cannot update immutable field: ${field}. Use publishFlowVersion() or archiveFlowVersion() for status changes.`);
+        }
+      }
+      
+      // Security: Only allow safe fields to be updated
+      const safeFields = ['content', 'metadata', 'updatedAt'];
+      const sanitizedUpdates: any = { updatedAt: new Date() };
+      
+      for (const [key, value] of Object.entries(updates)) {
+        if (safeFields.includes(key)) {
+          sanitizedUpdates[key] = value;
+        } else {
+          throw createError.validation(`Field '${key}' is not allowed to be updated. Available fields: ${safeFields.join(', ')}`);
+        }
+      }
+      
+      // Now perform the update with sanitized fields
+      const [version] = await db
+        .update(flowVersions)
+        .set(sanitizedUpdates)
+        .where(eq(flowVersions.id, id))
+        .returning();
+      
+      if (!version) {
+        throw createError.database('Failed to update flow version');
+      }
+      
+      return version;
+    }, 'updateFlowVersion');
+  }
+
+  async publishFlowVersion(id: string, tenantId: string, publishedBy: string): Promise<FlowVersion> {
+    return await withDatabaseRetry(async () => {
+      // First validate tenant ownership through flow
+      const flowVersionWithFlow = await db
+        .select({ 
+          flowVersionId: flowVersions.id,
+          flowId: flowVersions.flowId,
+          flowTenantId: flows.tenantId,
+          status: flowVersions.status
+        })
+        .from(flowVersions)
+        .innerJoin(flows, eq(flowVersions.flowId, flows.id))
+        .where(eq(flowVersions.id, id))
+        .limit(1);
+      
+      if (flowVersionWithFlow.length === 0) {
+        throw createError.notFound('Flow version not found');
+      }
+      
+      if (flowVersionWithFlow[0].flowTenantId !== tenantId) {
+        throw createError.notFound('Flow version not found or access denied');
+      }
+      
+      const targetFlowId = flowVersionWithFlow[0].flowId;
+      
+      // Use database transaction for atomic publish operation
+      return await db.transaction(async (tx) => {
+        // Demote any existing live version to archived (tenant-scoped)
+        await tx
+          .update(flowVersions)
+          .set({ 
+            status: 'archived',
+            updatedAt: new Date()
+          })
+          .where(and(
+            eq(flowVersions.flowId, targetFlowId),
+            eq(flowVersions.status, 'live')
+          ));
+
+        // Promote target version to live
+        const [publishedVersion] = await tx
+          .update(flowVersions)
+          .set({
+            status: 'live',
+            publishedAt: new Date(),
+            publishedBy,
+            updatedAt: new Date()
+          })
+          .where(eq(flowVersions.id, id))
+          .returning();
+
+        if (!publishedVersion) {
+          throw createError.database('Failed to publish flow version');
+        }
+
+        return publishedVersion;
+      });
+    }, 'publishFlowVersion');
+  }
+
+  async archiveFlowVersion(id: string, tenantId: string): Promise<FlowVersion> {
+    return await withDatabaseRetry(async () => {
+      // First validate tenant ownership through flow
+      const flowVersionWithFlow = await db
+        .select({ flowTenantId: flows.tenantId })
+        .from(flowVersions)
+        .innerJoin(flows, eq(flowVersions.flowId, flows.id))
+        .where(eq(flowVersions.id, id))
+        .limit(1);
+      
+      if (flowVersionWithFlow.length === 0) {
+        throw createError.notFound('Flow version not found');
+      }
+      
+      if (flowVersionWithFlow[0].flowTenantId !== tenantId) {
+        throw createError.notFound('Flow version not found or access denied');
+      }
+      
+      // Now perform the archive operation
+      const [version] = await db
+        .update(flowVersions)
+        .set({ 
+          status: 'archived',
+          updatedAt: new Date()
+        })
+        .where(eq(flowVersions.id, id))
+        .returning();
+      
+      if (!version) {
+        throw createError.database('Failed to archive flow version');
+      }
+      
+      return version;
+    }, 'archiveFlowVersion');
   }
 }
 
