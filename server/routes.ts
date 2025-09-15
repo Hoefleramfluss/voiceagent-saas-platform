@@ -3127,6 +3127,128 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // 🎯 ADMIN USER MANAGEMENT - Complete CRUD operations
+  app.get("/api/admin/users", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { limit = 50, offset = 0, tenantId } = req.query;
+      
+      const users = await storage.getAllUsers({
+        limit: parseInt(limit as string),
+        offset: parseInt(offset as string),
+        tenantId: tenantId as string
+      });
+      
+      // Return safe user data (without passwords)
+      const safeUsers = users.map(user => ({
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        tenantId: user.tenantId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        status: user.status,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }));
+      
+      res.json(safeUsers);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/admin/users/:userId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.params.userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Return safe user data (without password)
+      const safeUser = {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        tenantId: user.tenantId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        status: user.status,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      };
+      
+      res.json(safeUser);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.put("/api/admin/users/:userId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = z.object({
+        email: z.string().email().optional(),
+        role: z.enum(['customer_admin', 'customer_user', 'support']).optional(),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        status: z.enum(['active', 'inactive', 'suspended']).optional()
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const updates = validation.data;
+      
+      // Check if user exists before updating
+      const existingUser = await storage.getUser(req.params.userId);
+      if (!existingUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // If email is being updated, check for conflicts
+      if (updates.email && updates.email !== existingUser.email) {
+        const emailConflict = await storage.getUserByEmail(updates.email);
+        if (emailConflict) {
+          return res.status(400).json({ message: "Email already exists" });
+        }
+      }
+      
+      const updatedUser = await storage.updateUser(req.params.userId, updates);
+      
+      // Return safe user data (without password)
+      const safeUser = {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        tenantId: updatedUser.tenantId,
+        firstName: updatedUser.firstName,
+        lastName: updatedUser.lastName,
+        status: updatedUser.status,
+        createdAt: updatedUser.createdAt,
+        updatedAt: updatedUser.updatedAt
+      };
+      
+      res.json(safeUser);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/admin/users/:userId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      await storage.deleteUser(req.params.userId);
+      res.json({ message: "User deleted successfully" });
+    } catch (error) {
+      if ((error as Error).message.includes('not found') || (error as Error).message.includes('Not found')) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
   // API 404 fallback handler - return JSON instead of HTML for unknown API routes
   app.use('/api/*', (req, res) => {
     res.status(404).json({ 

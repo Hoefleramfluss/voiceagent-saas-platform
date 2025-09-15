@@ -69,7 +69,10 @@ export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, updates: Partial<User>): Promise<User>;
   updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User>;
+  getAllUsers(options?: { limit?: number; offset?: number; tenantId?: string }): Promise<User[]>;
+  deleteUser(id: string): Promise<void>;
 
   // Tenant operations
   getTenants(): Promise<Tenant[]>;
@@ -297,6 +300,18 @@ export class DatabaseStorage implements IStorage {
     }, 'createUser');
   }
 
+  async updateUser(id: string, updates: Partial<User>): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    if (!user) {
+      throw createError(404, 'User not found');
+    }
+    return user;
+  }
+
   async updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User> {
     const [user] = await db
       .update(users)
@@ -307,6 +322,35 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, userId))
       .returning();
     return user;
+  }
+
+  async getAllUsers(options?: { limit?: number; offset?: number; tenantId?: string }): Promise<User[]> {
+    let query = db.select().from(users);
+    
+    if (options?.tenantId) {
+      query = query.where(eq(users.tenantId, options.tenantId));
+    }
+    
+    query = query.orderBy(desc(users.createdAt));
+    
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
+    
+    if (options?.offset) {
+      query = query.offset(options.offset);
+    }
+    
+    return await query;
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    const user = await this.getUser(id);
+    if (!user) {
+      throw createError(404, 'User not found');
+    }
+    
+    await db.delete(users).where(eq(users.id, id));
   }
 
   async getTenants(): Promise<Tenant[]> {
