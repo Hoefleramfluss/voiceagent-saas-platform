@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 export default function AdminBilling() {
-  const [selectedTenant, setSelectedTenant] = useState<string>("");
+  const [selectedTenant, setSelectedTenant] = useState<string>("all");
   const [timeRange, setTimeRange] = useState<string>("month");
 
   const { data: tenants } = useQuery<TenantsResponse>({
@@ -36,7 +36,7 @@ export default function AdminBilling() {
     queryFn: async () => {
       const params = new URLSearchParams();
       if (timeRange) params.append('timeRange', timeRange);
-      if (selectedTenant) params.append('tenantId', selectedTenant);
+      if (selectedTenant && selectedTenant !== 'all') params.append('tenantId', selectedTenant);
       
       const url = `/api/admin/billing/overview${params.toString() ? '?' + params.toString() : ''}`;
       const response = await fetch(url, {
@@ -143,8 +143,8 @@ export default function AdminBilling() {
                 </SelectContent>
               </Select>
               <Button 
-                onClick={() => selectedTenant && generateInvoiceMutation.mutate({ tenantId: selectedTenant })}
-                disabled={!selectedTenant || generateInvoiceMutation.isPending}
+                onClick={() => selectedTenant && selectedTenant !== 'all' && generateInvoiceMutation.mutate({ tenantId: selectedTenant })}
+                disabled={!selectedTenant || selectedTenant === 'all' || generateInvoiceMutation.isPending}
                 data-testid="button-generate-invoice"
               >
                 <Receipt className="w-4 h-4 mr-2" />
@@ -264,7 +264,7 @@ export default function AdminBilling() {
                     <SelectValue placeholder="All customers" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All customers</SelectItem>
+                    <SelectItem value="all">All customers</SelectItem>
                     {tenants?.map((tenant: any) => (
                       <SelectItem key={tenant.id} value={tenant.id}>
                         {tenant.name}
@@ -272,10 +272,10 @@ export default function AdminBilling() {
                     ))}
                   </SelectContent>
                 </Select>
-                {selectedTenant && (
+                {selectedTenant && selectedTenant !== 'all' && (
                   <Button
                     variant="outline"
-                    onClick={() => setSelectedTenant("")}
+                    onClick={() => setSelectedTenant("all")}
                     data-testid="button-clear-filter"
                   >
                     Clear Filter

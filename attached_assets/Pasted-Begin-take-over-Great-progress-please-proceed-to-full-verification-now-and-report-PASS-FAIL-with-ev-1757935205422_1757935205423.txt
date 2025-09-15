@@ -1,0 +1,31 @@
+Begin take over. Great progress—please proceed to full verification now and report PASS/FAIL with evidence (logs/screenshots/JSON). Use the checklist below:
+Health & Security
+Hit /api/health → expect { stripe:"operational", database:"operational", redis:"operational" }.
+Confirm WAF no longer blocks legitimate /admin assets and still blocks known exploit patterns.
+Verify IPv6-safe rate limiting works (per-tenant, per-phone, per-user) and log metrics emit correctly.
+Tenant Isolation
+Create two tenants (A/B). Ensure flows, phone mappings, connectors, and usage data are strictly scoped.
+Attempt cross-tenant access (negative tests) → expect 403/blocked; attach logs.
+Phone → Tenant Mapping
+Map two E.164 numbers (A/B). Simulate Twilio webhook (inbound call) for each; verify routing to the correct tenant + correct live flow version.
+Demo Tenant Wizard
+Run /demo wizard end-to-end: Twilio number verification, STT/TTS selection, required system prompt, publish sample flow.
+Show resulting call path works (happy path) without exposing secrets.
+Connectors (CRM/Calendar)
+Exercise ConnectorService OAuth flow (at least Google Calendar).
+Create an appointment via flow action; confirm it lands in the tenant’s calendar.
+Provide evidence of CSRF protection, state/nonce validation, and tenant binding.
+Stripe Integration
+Frontend: import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY begins with pk_ (no rk_ or sk_ in browser).
+Backend: uses sk_ only; health check uses secret key (no permission errors).
+Trigger a payment test path or mock billing run; confirm no browser console errors.
+Minutes & Billing
+Simulate a voicebot call (media stream duration) + transfer segment; verify voicebot minutes and forwarding minutes are recorded per tenant.
+Run monthly aggregation: free minutes deducted, overage calculated, package base fee added; attach a sample invoice payload/log.
+Audit & Logs
+Show audit entries for: flow publish, connector changes, phone mapping updates, wizard steps.
+Confirm no sensitive data (keys/tokens) in logs; only prefixes.
+Docs & Artifacts
+Provide links to: migrations, API routes, demo runbook, security report (updated to match code), and a short release note.
+Create issues for remaining “future enhancements” (single-live-per-flow DB constraint, nonce persistence, provider-binding validation) if not implemented now.
+Please run these checks and reply with a concise test report (PASS/FAIL per item + evidence). If anything fails, apply fixes and re-run until all items pass.
