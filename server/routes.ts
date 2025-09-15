@@ -305,7 +305,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validation = insertBotSchema.extend({
-        tenantId: z.string().optional()
+        tenantId: z.string().optional(),
+        systemPrompt: z.string()
+          .min(1, "System prompt is required")
+          .max(10000, "System prompt must be less than 10,000 characters")
       }).safeParse({ ...req.body, tenantId });
 
       if (!validation.success) {
@@ -372,7 +375,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Bot not found" });
       }
 
-      const bot = await storage.updateBot(req.params.botId, req.body);
+      // Create partial validation schema for updates (all fields optional)
+      const updateBotSchema = insertBotSchema.partial().extend({
+        systemPrompt: z.string()
+          .min(1, "System prompt is required")
+          .max(10000, "System prompt must be less than 10,000 characters")
+          .optional()
+      });
+
+      const validation = updateBotSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validation.error.flatten() 
+        });
+      }
+
+      const bot = await storage.updateBot(req.params.botId, validation.data);
       res.json(bot);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
