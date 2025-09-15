@@ -42,7 +42,10 @@ import {
   type InsertFlowVersion,
   phoneNumberMappings,
   type PhoneNumberMapping,
-  type InsertPhoneNumberMapping
+  type InsertPhoneNumberMapping,
+  connectors,
+  type Connector,
+  type InsertConnector
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sum, count, gte, lte } from "drizzle-orm";
@@ -197,6 +200,14 @@ export interface IStorage {
   createPhoneNumberMapping(mapping: InsertPhoneNumberMapping): Promise<PhoneNumberMapping>;
   updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping>;
   deletePhoneNumberMapping(id: string, tenantId: string): Promise<void>;
+
+  // Connector operations
+  getConnectors(tenantId: string): Promise<Connector[]>;
+  getConnector(id: string, tenantId: string): Promise<Connector | undefined>;
+  getConnectorsByType(tenantId: string, type: 'crm' | 'calendar'): Promise<Connector[]>;
+  createConnector(connector: InsertConnector): Promise<Connector>;
+  updateConnector(id: string, tenantId: string, updates: Partial<Connector>): Promise<Connector>;
+  deleteConnector(id: string, tenantId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1245,6 +1256,111 @@ export class DatabaseStorage implements IStorage {
         throw createError.notFound('Phone number mapping not found or access denied');
       }
     }, 'deletePhoneNumberMapping');
+  }
+
+  // Connector operations
+  async getConnectors(tenantId: string): Promise<Connector[]> {
+    return await withDatabaseRetry(async () => {
+      return await db
+        .select()
+        .from(connectors)
+        .where(eq(connectors.tenantId, tenantId))
+        .orderBy(desc(connectors.createdAt));
+    }, 'getConnectors');
+  }
+
+  async getConnector(id: string, tenantId: string): Promise<Connector | undefined> {
+    return await withDatabaseRetry(async () => {
+      const [connector] = await db
+        .select()
+        .from(connectors)
+        .where(and(
+          eq(connectors.id, id),
+          eq(connectors.tenantId, tenantId)
+        ));
+      return connector || undefined;
+    }, 'getConnector');
+  }
+
+  async getConnectorsByType(tenantId: string, type: 'crm' | 'calendar'): Promise<Connector[]> {
+    return await withDatabaseRetry(async () => {
+      return await db
+        .select()
+        .from(connectors)
+        .where(and(
+          eq(connectors.tenantId, tenantId),
+          eq(connectors.type, type)
+        ))
+        .orderBy(desc(connectors.createdAt));
+    }, 'getConnectorsByType');
+  }
+
+  async createConnector(connector: InsertConnector): Promise<Connector> {
+    return await withDatabaseRetry(async () => {
+      const [newConnector] = await db
+        .insert(connectors)
+        .values(connector)
+        .returning();
+      
+      if (!newConnector) {
+        throw createError.database('Failed to create connector');
+      }
+      
+      return newConnector;
+    }, 'createConnector');
+  }
+
+  async updateConnector(id: string, tenantId: string, updates: Partial<Connector>): Promise<Connector> {
+    return await withDatabaseRetry(async () => {
+      // Whitelist safe fields to prevent tenant ownership transfer
+      const safeFields = ['name', 'config', 'isActive'] as const;
+      const safeUpdates: Partial<Connector> = {};
+      
+      for (const field of safeFields) {
+        if (field in updates && updates[field] !== undefined) {
+          (safeUpdates as any)[field] = updates[field];
+        }
+      }
+      
+      // Reject if forbidden fields are attempted
+      const forbiddenFields = ['id', 'tenantId', 'type', 'provider', 'createdAt'];
+      for (const field of forbiddenFields) {
+        if (field in updates) {
+          throw createError.badRequest(`Cannot update immutable field: ${field}`);
+        }
+      }
+      
+      const [connector] = await db
+        .update(connectors)
+        .set({ ...safeUpdates, updatedAt: new Date() })
+        .where(and(
+          eq(connectors.id, id),
+          eq(connectors.tenantId, tenantId)
+        ))
+        .returning();
+      
+      if (!connector) {
+        throw createError.notFound('Connector not found or access denied');
+      }
+      
+      return connector;
+    }, 'updateConnector');
+  }
+
+  async deleteConnector(id: string, tenantId: string): Promise<void> {
+    return await withDatabaseRetry(async () => {
+      const result = await db
+        .delete(connectors)
+        .where(and(
+          eq(connectors.id, id),
+          eq(connectors.tenantId, tenantId)
+        ))
+        .returning();
+      
+      if (result.length === 0) {
+        throw createError.notFound('Connector not found or access denied');
+      }
+    }, 'deleteConnector');
   }
 }
 
