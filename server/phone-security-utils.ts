@@ -40,18 +40,26 @@ export function normalizePhoneNumber(phoneNumber: string, defaultCountry?: strin
   try {
     let parsedNumber;
     
-    // First try to parse without country hint
+    // First try to parse without country hint - this handles international numbers with country codes
     if (isValidPhoneNumber(sanitized)) {
       parsedNumber = parsePhoneNumber(sanitized);
-    } else if (defaultCountry) {
-      // Try with provided default country
+    }
+    
+    // If not parsed and defaultCountry provided, try with default country for local numbers
+    if (!parsedNumber && defaultCountry) {
       const countryToTry = defaultCountry as CountryCode;
-      if (SUPPORTED_REGIONS.includes(countryToTry) && isValidPhoneNumber(sanitized, countryToTry)) {
-        parsedNumber = parsePhoneNumber(sanitized, countryToTry);
+      if (SUPPORTED_REGIONS.includes(countryToTry)) {
+        try {
+          if (isValidPhoneNumber(sanitized, countryToTry)) {
+            parsedNumber = parsePhoneNumber(sanitized, countryToTry);
+          }
+        } catch {
+          // Continue to try other regions
+        }
       }
     }
     
-    // If still not parsed, try supported regions in order of preference
+    // If still not parsed, try all supported regions in order of preference
     if (!parsedNumber) {
       for (const country of SUPPORTED_REGIONS) {
         try {
@@ -191,9 +199,18 @@ export function normalizePhoneToE164(phoneNumber: string, defaultCountry?: strin
  */
 export function validatePhoneNumber(phoneNumber: string): { isValid: boolean; error?: string } {
   try {
+    // Basic format validation first
     validatePhoneNumberFormat(phoneNumber);
-    normalizePhoneNumber(phoneNumber);
-    return { isValid: true };
+    
+    // Try to normalize - this will check if it's in supported regions
+    const normalized = normalizePhoneNumber(phoneNumber);
+    
+    // Additional check using libphonenumber-js
+    if (isValidPhoneNumber(normalized)) {
+      return { isValid: true };
+    } else {
+      return { isValid: false, error: 'Phone number format is invalid' };
+    }
   } catch (error) {
     return {
       isValid: false,
