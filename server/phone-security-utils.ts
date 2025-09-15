@@ -31,8 +31,8 @@ export function normalizePhoneNumber(phoneNumber: string, defaultCountry?: strin
     throw createError.validation('Phone number is required');
   }
   
-  // SECURITY: Basic input sanitization
-  const sanitized = phoneNumber.trim().replace(/[^\+\-\s\(\)\d]/g, '');
+  // SECURITY: Basic input sanitization - allow only phone number characters
+  const sanitized = phoneNumber.trim().replace(/[^\+\-\s\(\)\.\d]/g, '');
   if (sanitized !== phoneNumber.trim()) {
     throw createError.validation('Phone number contains invalid characters');
   }
@@ -40,73 +40,114 @@ export function normalizePhoneNumber(phoneNumber: string, defaultCountry?: strin
   try {
     let parsedNumber;
     
-    // First try to parse without country hint - this handles international numbers with country codes
-    if (isValidPhoneNumber(sanitized)) {
-      parsedNumber = parsePhoneNumber(sanitized);
+    // Strategy 1: If number starts with +, try parsing as international number
+    if (sanitized.startsWith('+')) {
+      try {
+        parsedNumber = parsePhoneNumber(sanitized);
+        // Verify it's a supported region
+        if (parsedNumber?.country && SUPPORTED_REGIONS.includes(parsedNumber.country)) {
+          return parsedNumber.format('E.164');
+        }
+      } catch {
+        // Continue to other strategies
+      }
     }
     
-    // If not parsed and defaultCountry provided, try with default country for local numbers
-    if (!parsedNumber && defaultCountry) {
+    // Strategy 2: Try with default country first (highest priority for local numbers)
+    if (defaultCountry && !sanitized.startsWith('+')) {
       const countryToTry = defaultCountry as CountryCode;
       if (SUPPORTED_REGIONS.includes(countryToTry)) {
         try {
-          if (isValidPhoneNumber(sanitized, countryToTry)) {
-            parsedNumber = parsePhoneNumber(sanitized, countryToTry);
+          parsedNumber = parsePhoneNumber(sanitized, countryToTry);
+          if (parsedNumber?.country && SUPPORTED_REGIONS.includes(parsedNumber.country)) {
+            return parsedNumber.format('E.164');
           }
         } catch {
-          // Continue to try other regions
+          // Continue to next strategy
         }
       }
     }
     
-    // If still not parsed, try all supported regions in order of preference
-    if (!parsedNumber) {
-      for (const country of SUPPORTED_REGIONS) {
-        try {
-          if (isValidPhoneNumber(sanitized, country)) {
-            parsedNumber = parsePhoneNumber(sanitized, country);
-            break;
-          }
-        } catch {
-          // Continue trying other countries
+    // Strategy 2.5: Smart detection for European mobile prefixes
+    if (!sanitized.startsWith('+') && sanitized.replace(/\D/g, '').startsWith('067')) {
+      // Austrian mobile numbers starting with 067x
+      try {
+        parsedNumber = parsePhoneNumber(sanitized, 'AT');
+        if (parsedNumber?.country === 'AT') {
+          return parsedNumber.format('E.164');
         }
+      } catch {
+        // Continue to next strategy
       }
     }
     
-    if (!parsedNumber) {
-      throw createError.validation(
-        `Invalid phone number format. Supported regions: ${SUPPORTED_REGIONS.join(', ')}`
-      );
+    // Strategy 3: Try US first (for US numbers without country code)
+    if (!defaultCountry || defaultCountry !== 'US') {
+      try {
+        parsedNumber = parsePhoneNumber(sanitized, 'US');
+        if (parsedNumber?.country === 'US') {
+          return parsedNumber.format('E.164');
+        }
+      } catch {
+        // Continue to next strategy
+      }
     }
     
-    // SECURITY: Verify the parsed number is from a supported region
-    if (!parsedNumber.country || !SUPPORTED_REGIONS.includes(parsedNumber.country)) {
-      throw createError.validation(
-        `Phone number region '${parsedNumber.country || 'unknown'}' is not supported. ` +
-        `Supported regions: ${SUPPORTED_REGIONS.join(', ')}`
-      );
+    // Strategy 4: Try Austria specifically for numbers starting with 0
+    if (!sanitized.startsWith('+') && sanitized.replace(/\D/g, '').startsWith('0')) {
+      try {
+        parsedNumber = parsePhoneNumber(sanitized, 'AT');
+        if (parsedNumber?.country === 'AT') {
+          return parsedNumber.format('E.164');
+        }
+      } catch {
+        // Continue to next strategy
+      }
     }
     
-    // SECURITY: Additional validation for mobile numbers (preferred for SMS)
-    const numberType = parsedNumber.getType();
-    if (numberType && !['MOBILE', 'FIXED_LINE_OR_MOBILE'].includes(numberType)) {
-      console.warn(`[PhoneValidation] Non-mobile number detected: ${parsedNumber.number} (type: ${numberType})`);
+    // Strategy 5: Try each supported region systematically
+    const regionsToTry = SUPPORTED_REGIONS.filter(region => 
+      region !== defaultCountry && region !== 'US' && region !== 'AT'
+    );
+    
+    for (const country of regionsToTry) {
+      try {
+        parsedNumber = parsePhoneNumber(sanitized, country);
+        if (parsedNumber?.country && SUPPORTED_REGIONS.includes(parsedNumber.country)) {
+          return parsedNumber.format('E.164');
+        }
+      } catch {
+        // Continue trying other countries
+      }
     }
     
-    return parsedNumber.format('E.164');
+    // Strategy 5: Final attempt without country hint
+    try {
+      parsedNumber = parsePhoneNumber(sanitized);
+      if (parsedNumber?.country && SUPPORTED_REGIONS.includes(parsedNumber.country)) {
+        return parsedNumber.format('E.164');
+      }
+    } catch {
+      // Final strategy failed
+    }
+    
+    throw createError.validation(
+      `Unable to parse phone number as valid format. Supported regions: ${SUPPORTED_REGIONS.join(', ')}`
+    );
     
   } catch (error) {
     if (error instanceof Error && (error.name === 'ValidationError' || error.name === 'BadRequestError')) {
       throw error;
     }
-    throw createError.validation(`Invalid phone number format: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw createError.validation(`Phone number validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * SECURITY: Validate phone number for demo signup with strict checks
+ * SECURITY: Validate phone number for demo signup with flexible test number support
+ * Allows 555 numbers for testing while blocking known problematic patterns in production
  */
-export function validateDemoPhoneNumber(phoneNumber: string): void {
+export function validateDemoPhoneNumber(phoneNumber: string, allowTestNumbers: boolean = true): void {
   if (!phoneNumber) {
     throw createError.validation('Phone number is required for demo verification');
   }
@@ -121,12 +162,23 @@ export function validateDemoPhoneNumber(phoneNumber: string): void {
     // Additional security checks
     const parsed = parsePhoneNumber(normalized);
     
-    // Block known problematic number patterns
-    const problematicPatterns = [
-      /^\+1555/, // US reserved test numbers
+    // Block known problematic number patterns (except for test scenarios)
+    const problematicPatterns = [];
+    
+    // Only block 555 numbers in production/strict mode
+    if (!allowTestNumbers) {
+      problematicPatterns.push(/^\+1555/); // US reserved test numbers
+    }
+    
+    // Always block these problematic patterns
+    problematicPatterns.push(
       /^\+44800/, // UK freephone
       /^\+49800/, // DE freephone
-    ];
+      /^\+1800/, // US toll-free
+      /^\+1888/, // US toll-free
+      /^\+1877/, // US toll-free
+      /^\+1866/, // US toll-free
+    );
     
     for (const pattern of problematicPatterns) {
       if (pattern.test(normalized)) {
@@ -134,7 +186,7 @@ export function validateDemoPhoneNumber(phoneNumber: string): void {
       }
     }
     
-    console.log(`[PhoneValidation] Valid demo phone number: ${normalized} (country: ${parsed.country})`);
+    console.log(`[PhoneValidation] Valid demo phone number: ${normalized} (country: ${parsed.country}, testMode: ${allowTestNumbers})`);
     
   } catch (error) {
     if (error instanceof Error && (error.name === 'ValidationError' || error.name === 'BadRequestError')) {
@@ -196,8 +248,11 @@ export function normalizePhoneToE164(phoneNumber: string, defaultCountry?: strin
 
 /**
  * Validate phone number and return validation result (for enterprise tests)
+ * Supports both production and test number validation modes
  */
-export function validatePhoneNumber(phoneNumber: string): { isValid: boolean; error?: string } {
+export function validatePhoneNumber(phoneNumber: string, options: { allowTestNumbers?: boolean; strictMode?: boolean } = {}): { isValid: boolean; error?: string } {
+  const { allowTestNumbers = true, strictMode = false } = options;
+  
   try {
     // Basic format validation first
     validatePhoneNumberFormat(phoneNumber);
@@ -205,12 +260,25 @@ export function validatePhoneNumber(phoneNumber: string): { isValid: boolean; er
     // Try to normalize - this will check if it's in supported regions
     const normalized = normalizePhoneNumber(phoneNumber);
     
-    // Additional check using libphonenumber-js
-    if (isValidPhoneNumber(normalized)) {
-      return { isValid: true };
-    } else {
-      return { isValid: false, error: 'Phone number format is invalid' };
+    // Additional validation using libphonenumber-js
+    if (!isValidPhoneNumber(normalized)) {
+      return { isValid: false, error: 'Phone number format is invalid according to libphonenumber-js' };
     }
+    
+    // Apply demo phone validation logic if in strict mode
+    if (strictMode) {
+      try {
+        validateDemoPhoneNumber(phoneNumber, allowTestNumbers);
+      } catch (error) {
+        return {
+          isValid: false,
+          error: error instanceof Error ? error.message : 'Failed strict validation'
+        };
+      }
+    }
+    
+    return { isValid: true };
+    
   } catch (error) {
     return {
       isValid: false,

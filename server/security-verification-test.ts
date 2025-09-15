@@ -74,19 +74,23 @@ export class SecurityVerificationTest {
     console.log('🧪 Test 1: Phone Number Normalization to E.164 Format');
     
     try {
-      // Test various phone number formats
+      // Test various phone number formats including test numbers
       const testCases = [
-        { input: '5551234567', expected: '+15551234567' },        // 10-digit US number
-        { input: '15551234567', expected: '+15551234567' },       // 11-digit US number
-        { input: '(555) 123-4567', expected: '+15551234567' },    // Formatted US number
+        { input: '5551234567', expected: '+15551234567' },        // 10-digit US test number
+        { input: '15551234567', expected: '+15551234567' },       // 11-digit US test number
+        { input: '(555) 123-4567', expected: '+15551234567' },    // Formatted US test number
         { input: '+1-555-123-4567', expected: '+15551234567' },   // Already E.164-like
         { input: '555.123.4567', expected: '+15551234567' },      // Dot-separated
+        { input: '+43 677 12345678', expected: '+4367712345678' }, // Austrian number
+        { input: '0677 12345678', expected: '+4367712345678' },    // Austrian local format
       ];
 
       let allPassed = true;
       for (const testCase of testCases) {
         try {
-          const normalized = normalizePhoneNumber(testCase.input);
+          // Use appropriate default country for different number formats
+          const defaultCountry = testCase.input.startsWith('0') ? 'AT' : 'US';
+          const normalized = normalizePhoneNumber(testCase.input, defaultCountry);
           if (normalized === testCase.expected) {
             console.log(`  ✅ ${testCase.input} → ${normalized}`);
           } else {

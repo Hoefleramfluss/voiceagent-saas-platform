@@ -129,11 +129,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/demo/create-tenant", demoTenantRateLimit, async (req, res) => {
     try {
       const { demoTenantService } = await import("./demo-tenant-service");
+      const { validatePhoneNumber } = await import("./phone-security-utils");
       
       const validation = z.object({
         companyName: z.string().min(1, "Company name is required"),
         contactEmail: z.string().email("Valid email address required"),
-        contactPhone: z.string().min(10, "Valid phone number required").max(20, "Phone number too long"),
+        contactPhone: z.string().refine((phone) => {
+          const result = validatePhoneNumber(phone, { allowTestNumbers: true });
+          return result.isValid;
+        }, "Valid phone number in E.164 format required"),
         firstName: z.string().optional(),
         lastName: z.string().optional(),
         industry: z.string().min(1, "Industry is required"),
@@ -731,10 +735,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/twilio/numbers/purchase", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
       const { twilioService } = await import("./twilio-service");
+      const { validatePhoneNumber, validateBotOwnership } = await import("./phone-security-utils");
       const { phoneNumber, tenantId, botId, friendlyName } = req.body;
       
       if (!phoneNumber || !tenantId || !botId) {
         return res.status(400).json({ message: "phoneNumber, tenantId, and botId are required" });
+      }
+      
+      // SECURITY: Validate phone number format
+      const phoneValidation = validatePhoneNumber(phoneNumber, { allowTestNumbers: false, strictMode: true });
+      if (!phoneValidation.isValid) {
+        return res.status(400).json({ message: `Invalid phone number: ${phoneValidation.error}` });
+      }
+      
+      // SECURITY: Validate bot ownership
+      try {
+        await validateBotOwnership(botId, tenantId);
+      } catch (error) {
+        return res.status(403).json({ message: "Bot does not belong to this tenant" });
       }
       
       const result = await twilioService.purchasePhoneNumber({
@@ -759,11 +777,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/twilio/numbers/assign", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
       const { twilioService } = await import("./twilio-service");
+      const { validatePhoneNumber, validateBotOwnership, checkPhoneSecurityViolations } = await import("./phone-security-utils");
       const { numberSid, phoneNumber, tenantId, botId } = req.body;
       
       if (!numberSid || !phoneNumber || !tenantId || !botId) {
         return res.status(400).json({ 
           message: "numberSid, phoneNumber, tenantId, and botId are required" 
+        });
+      }
+      
+      // SECURITY: Validate phone number format
+      const phoneValidation = validatePhoneNumber(phoneNumber, { allowTestNumbers: false, strictMode: true });
+      if (!phoneValidation.isValid) {
+        return res.status(400).json({ message: `Invalid phone number: ${phoneValidation.error}` });
+      }
+      
+      // SECURITY: Check for cross-tenant violations
+      const securityCheck = await checkPhoneSecurityViolations(phoneNumber, tenantId, botId);
+      if (securityCheck.hasViolations) {
+        return res.status(403).json({ 
+          message: `Security violation: ${securityCheck.details}`,
+          violations: securityCheck.violations
         });
       }
       
