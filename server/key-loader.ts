@@ -72,7 +72,12 @@ class SecureKeyLoader {
       console.log(`[KeyLoader] Successfully loaded key for ${serviceType}`);
       return decryptedValue;
     } catch (error) {
-      console.error(`[KeyLoader] Error loading key for ${serviceType}:`, error);
+      // Handle decryption failures gracefully - these are often configuration issues
+      if (error instanceof Error && error.message.includes('Failed to decrypt')) {
+        console.warn(`[KeyLoader] Unable to decrypt key for ${serviceType} - key may be corrupted or encryption key changed`);
+      } else {
+        console.error(`[KeyLoader] Error loading key for ${serviceType}:`, error);
+      }
       return null;
     }
   }
