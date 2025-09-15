@@ -250,6 +250,8 @@ export const tenantSettings = pgTable("tenant_settings", {
   openaiModel: varchar("openai_model", { length: 100 }).notNull().default('gpt-4'),
   // Localization
   defaultLocale: varchar("default_locale", { length: 10 }).notNull().default('de-AT'),
+  // Template variables for dynamic content
+  templateVariables: jsonb("template_variables"),
   // Billing package
   billingPackageId: uuid("billing_package_id").references(() => subscriptionPlans.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
