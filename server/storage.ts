@@ -1507,6 +1507,32 @@ export class DatabaseStorage implements IStorage {
     return configs;
   }
   
+  async updateConnectorConfig(id: string, updates: Partial<{
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }>): Promise<{
+    id: string;
+    tenantId: string;
+    connectorType: string;
+    isActive: boolean;
+    config: any;
+  }> {
+    if (!this.connectorConfigs.has(id)) {
+      throw createError.notFound('Connector config not found');
+    }
+    
+    const existingConfig = this.connectorConfigs.get(id)!;
+    const updatedConfig = {
+      ...existingConfig,
+      ...updates
+    };
+    
+    this.connectorConfigs.set(id, updatedConfig);
+    return updatedConfig;
+  }
+  
   async deleteConnectorConfig(id: string): Promise<void> {
     if (!this.connectorConfigs.has(id)) {
       throw createError.notFound('Connector config not found');
