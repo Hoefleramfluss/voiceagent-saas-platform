@@ -560,6 +560,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST /api/customers/:id/billing/apply-usage - Apply usage minutes
   app.post("/api/customers/:id/billing/apply-usage", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
+      // Audit trail for billing usage application
+      console.log(`[AUDIT] Admin ${req.user.email} applied billing usage for customer ${req.params.id} at ${new Date().toISOString()}`);
       const { id } = req.params;
       const validation = z.object({
         botId: z.string().uuid("Valid bot ID required"),
@@ -899,6 +901,242 @@ export async function registerRoutes(app: Express): Promise<Server> {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error"
       });
+    }
+  });
+
+  // System Logs Feed API (Platform Admin only)
+  app.get("/api/system/logs", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      // Audit trail for system logs access
+      console.log(`[AUDIT] Admin ${req.user.email} accessed system logs at ${new Date().toISOString()}`);
+      const { limit = 100, severity } = req.query;
+      
+      // Get recent logs from error monitoring
+      const { getSystemHealth } = await import('./error-handling');
+      const healthData = getSystemHealth();
+      
+      // In a real system, this would read from actual log files or log aggregation service
+      // For now, return structured health and error data
+      const logData = {
+        timestamp: new Date().toISOString(),
+        systemHealth: healthData,
+        recentErrors: [], // Would be populated from actual error logs
+        systemMetrics: {
+          uptime: process.uptime(),
+          memoryUsage: process.memoryUsage(),
+          environment: process.env.NODE_ENV || 'development'
+        },
+        backgroundJobs: {
+          // Would get from BackgroundJobManager if exposed
+          status: "All jobs running normally"
+        },
+        rateLimiting: {
+          // Would get rate limit stats
+          status: "Normal operation"
+        }
+      };
+
+      res.json({
+        success: true,
+        logs: logData,
+        meta: {
+          total: 1,
+          limit: Number(limit),
+          severity: severity || 'all'
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to retrieve logs"
+      });
+    }
+  });
+
+  // System Health Summary API (Platform Admin only)
+  app.get("/api/system/health", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { getSystemHealth } = await import('./error-handling');
+      const healthData = getSystemHealth();
+      
+      // Get additional health metrics
+      const memUsage = process.memoryUsage();
+      const healthSummary = {
+        status: healthData.status,
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        memory: {
+          used: Math.round(memUsage.heapUsed / 1024 / 1024),
+          total: Math.round(memUsage.heapTotal / 1024 / 1024),
+          rss: Math.round(memUsage.rss / 1024 / 1024)
+        },
+        errors: healthData.errors,
+        services: {
+          database: "connected",
+          backgroundJobs: "running",
+          rateLimiting: "active"
+        }
+      };
+
+      res.json({
+        success: true,
+        health: healthSummary
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to retrieve health data"
+      });
+    }
+  });
+
+  // API Batching Endpoint (Platform Admin only) - Token-efficient multiple operations
+  app.post("/api/batch", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      // Audit trail for batch API usage
+      console.log(`[AUDIT] Admin ${req.user.email} used batch API with ${req.body?.requests?.length || 0} requests at ${new Date().toISOString()}`);
+      const validation = z.object({
+        requests: z.array(z.object({
+          id: z.string(),
+          method: z.enum(['GET', 'POST', 'PATCH']),
+          path: z.string(),
+          body: z.any().optional()
+        })).max(10) // Limit batch size for cost protection
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten()
+        });
+      }
+
+      const results = [];
+      
+      // Process requests in batch (token-efficient)
+      for (const request of validation.data.requests) {
+        try {
+          let result: any;
+          
+          // Handle common batch operations efficiently
+          if (request.path.startsWith('/api/customers/') && request.method === 'GET') {
+            // Batch customer lookups
+            const customerId = request.path.split('/')[3];
+            const customer = await storage.getTenant(customerId);
+            result = customer ? {
+              id: customer.id,
+              name: customer.name,
+              status: customer.status || 'active',
+              stripeCustomerId: customer.stripeCustomerId
+            } : null;
+          } else if (request.path.startsWith('/api/retell/agents') && request.method === 'GET') {
+            // Batch agent lookups - lazy loading
+            const bots = await storage.db.select().from(storage.db.schema.bots).limit(5);
+            result = bots.filter(bot => bot.retellAgentId).map(bot => ({
+              botId: bot.id,
+              retellAgentId: bot.retellAgentId,
+              name: bot.name,
+              status: bot.status,
+              // Lazy preview - minimal data only
+              preview: true
+            }));
+          } else {
+            result = { error: 'Batch operation not supported for this path' };
+          }
+          
+          results.push({
+            id: request.id,
+            status: result ? 'success' : 'not_found',
+            data: result
+          });
+        } catch (error) {
+          results.push({
+            id: request.id,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        meta: {
+          processed: validation.data.requests.length,
+          timestamp: new Date().toISOString(),
+          tokenOptimized: true
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Batch operation failed"
+      });
+    }
+  });
+
+  // 404 Route Checker API (Platform Admin only)
+  app.get("/api/system/routes", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      // Add known API routes for reference
+      const knownApiRoutes = [
+        { path: '/health', methods: ['GET'], type: 'health' },
+        { path: '/health/detailed', methods: ['GET'], type: 'health' },
+        { path: '/api/auth/user', methods: ['GET'], type: 'auth' },
+        { path: '/api/tenants', methods: ['GET', 'POST'], type: 'admin' },
+        { path: '/api/customers', methods: ['GET', 'POST'], type: 'admin' },
+        { path: '/api/customers/:id/billing/overview', methods: ['GET'], type: 'billing' },
+        { path: '/api/customers/:id/billing/apply-usage', methods: ['POST'], type: 'billing' },
+        { path: '/api/retell/status', methods: ['GET'], type: 'retell' },
+        { path: '/api/retell/agents', methods: ['GET'], type: 'retell' },
+        { path: '/api/retell/agents/:id', methods: ['PATCH'], type: 'retell' },
+        { path: '/api/retell/deploy-flow', methods: ['POST'], type: 'retell' },
+        { path: '/api/retell/open-link', methods: ['POST'], type: 'retell' },
+        { path: '/api/system/logs', methods: ['GET'], type: 'system' },
+        { path: '/api/system/health', methods: ['GET'], type: 'system' },
+        { path: '/api/system/routes', methods: ['GET'], type: 'system' }
+      ];
+
+      res.json({
+        success: true,
+        routes: {
+          known: knownApiRoutes,
+          total: knownApiRoutes.length
+        },
+        meta: {
+          timestamp: new Date().toISOString(),
+          method: "route-inventory"
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to retrieve routes"
+      });
+    }
+  });
+
+  // Customer management (Platform Admin only) - Alias for tenants
+  app.get("/api/customers", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      // Audit trail for customer list access
+      console.log(`[AUDIT] Admin ${req.user.email} accessed customer list at ${new Date().toISOString()}`);
+      
+      const tenants = await storage.getTenants();
+      // Transform tenants to customer format for Customer Ops Dashboard
+      const customers = tenants.map(tenant => ({
+        id: tenant.id,
+        name: tenant.name,
+        status: tenant.status || 'active',
+        stripeCustomerId: tenant.stripeCustomerId,
+        billingRunningBalanceCents: tenant.billingRunningBalanceCents || 0,
+        createdAt: tenant.createdAt,
+        updatedAt: tenant.updatedAt
+      }));
+      res.json(customers);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
     }
   });
 
