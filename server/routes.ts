@@ -2,7 +2,6 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import Stripe from "stripe";
 import { setupAuth, isAuthenticated } from "./replitAuth";
-// Legacy auth functions still needed during transition
 import { requireAuth, requireRole, requireTenantAccess, hashPassword } from "./auth";
 import { storage } from "./storage";
 import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema, insertPhoneNumberMappingSchema, updatePhoneNumberMappingSchema, insertFlowSchema } from "@shared/schema";
