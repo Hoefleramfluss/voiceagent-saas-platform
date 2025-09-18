@@ -16,7 +16,8 @@ import {
   flowVersions,
   type Tenant,
   type User, 
-  type InsertUser, 
+  type InsertUser,
+  type UpsertUser,
   type InsertTenant, 
   type Bot,
   type InsertBot,
@@ -73,6 +74,8 @@ export interface IStorage {
   updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User>;
   getAllUsers(options?: { limit?: number; offset?: number; tenantId?: string }): Promise<User[]>;
   deleteUser(id: string): Promise<void>;
+  // Replit Auth specific operations
+  upsertUser(user: UpsertUser): Promise<User>;
 
   // Tenant operations
   getTenants(): Promise<Tenant[]>;
@@ -359,6 +362,40 @@ export class DatabaseStorage implements IStorage {
     }
     
     await db.delete(users).where(eq(users.id, id));
+  }
+
+  // Replit Auth specific method - Email-based upsert for safety
+  async upsertUser(userData: UpsertUser): Promise<User> {
+    if (!userData.email) {
+      throw createError.validation('Email is required for user upsert');
+    }
+    
+    return await withDatabaseRetry(async () => {
+      const [user] = await db
+        .insert(users)
+        .values({
+          email: userData.email,
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          profileImageUrl: userData.profileImageUrl,
+          lastLoginAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: users.email,
+          set: {
+            firstName: userData.firstName,
+            lastName: userData.lastName,
+            profileImageUrl: userData.profileImageUrl,
+            lastLoginAt: new Date(),
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      if (!user) {
+        throw createError.database('Failed to upsert user');
+      }
+      return user;
+    }, 'upsertUser');
   }
 
   async getTenants(): Promise<Tenant[]> {
