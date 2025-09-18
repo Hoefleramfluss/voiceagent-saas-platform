@@ -92,7 +92,7 @@ export async function setupAuth(app: Express) {
     tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
     verified: passport.AuthenticateCallback
   ) => {
-    const user = {};
+    const user: any = {};
     updateUserSession(user, tokens);
     await upsertUser(tokens.claims());
     verified(null, user);
@@ -190,7 +190,7 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     
     // After refreshing token, also fetch user from database
     const userEmail = tokenResponse.claims()?.email;
-    if (userEmail) {
+    if (userEmail && typeof userEmail === 'string') {
       const dbUser = await storage.getUserByEmail(userEmail);
       if (dbUser) {
         (req as any).user = {
