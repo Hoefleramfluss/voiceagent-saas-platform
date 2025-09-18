@@ -1,4 +1,4 @@
-import { useAuth } from "@/hooks/useAuth";
+import { useUserRole } from "@/hooks/useUserRole";
 import { Loader2 } from "lucide-react";
 import { Redirect, Route } from "wouter";
 
@@ -11,7 +11,7 @@ export function ProtectedRoute({
   component: () => React.JSX.Element;
   roles?: string[];
 }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading } = useUserRole();
 
   if (isLoading) {
     return (
@@ -31,15 +31,10 @@ export function ProtectedRoute({
     );
   }
 
-  if (roles && !roles.includes(user.role)) {
+  if (roles && user && !roles.includes(user.role)) {
     return (
       <Route path={path}>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-foreground mb-2">Access Denied</h1>
-            <p className="text-muted-foreground">You don't have permission to access this page.</p>
-          </div>
-        </div>
+        <Redirect to="/unauthorized" />
       </Route>
     );
   }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import type { TenantsResponse } from "@shared/api-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +19,7 @@ interface CreateTenantData {
   email: string;
 }
 
-export default function AdminCustomers() {
+function AdminCustomersContent() {
   const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newTenant, setNewTenant] = useState<CreateTenantData>({ name: "", email: "" });
@@ -70,7 +71,8 @@ export default function AdminCustomers() {
   }
 
   return (
-    <div className="flex bg-background min-h-screen">
+    <AdminGuard>
+      <div className="flex bg-background min-h-screen">
       <AdminSidebar />
       
       <div className="ml-72 flex-1">
@@ -280,6 +282,11 @@ export default function AdminCustomers() {
           </Card>
         </main>
       </div>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function AdminCustomers() {
+  return <AdminCustomersContent />;
 }

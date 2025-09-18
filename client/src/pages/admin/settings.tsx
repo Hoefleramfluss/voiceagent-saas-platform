@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import type { ApiKey } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,7 +51,7 @@ const serviceTypeColors = {
   heroku: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200'
 } as const;
 
-export default function AdminSettings() {
+function AdminSettingsContent() {
   const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
@@ -191,7 +192,8 @@ export default function AdminSettings() {
   }
 
   return (
-    <div className="flex bg-background min-h-screen">
+    <AdminGuard>
+      <div className="flex bg-background min-h-screen">
       <AdminSidebar />
       
       <div className="ml-72 flex-1">
@@ -512,6 +514,11 @@ export default function AdminSettings() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function AdminSettings() {
+  return <AdminSettingsContent />;
 }
