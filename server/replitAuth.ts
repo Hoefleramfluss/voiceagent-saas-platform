@@ -157,8 +157,12 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     // Fetch the full user from database to get role and other properties
     try {
       const userEmail = user.claims?.email;
+      console.log('[AUTH] Fetching user from database for email:', userEmail);
+      
       if (userEmail) {
         const dbUser = await storage.getUserByEmail(userEmail);
+        console.log('[AUTH] Database user found:', dbUser ? { id: dbUser.id, email: dbUser.email, role: dbUser.role } : 'null');
+        
         if (dbUser) {
           // Attach database user info to req.user for downstream middleware
           (req as any).user = {
@@ -169,10 +173,18 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
             email: dbUser.email,
             isActive: dbUser.isActive
           };
+          console.log('[AUTH] Successfully attached DB user to req.user with role:', dbUser.role);
+        } else {
+          console.error('[AUTH] Database user not found for email:', userEmail);
+          return res.status(401).json({ message: "User not found in database" });
         }
+      } else {
+        console.error('[AUTH] No email in user claims');
+        return res.status(401).json({ message: "Invalid user claims" });
       }
     } catch (error) {
       console.error('[AUTH] Error fetching user from database:', error);
+      return res.status(500).json({ message: "Database error during authentication" });
     }
     return next();
   }
@@ -190,8 +202,12 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     
     // After refreshing token, also fetch user from database
     const userEmail = tokenResponse.claims()?.email;
+    console.log('[AUTH] After token refresh, fetching user for email:', userEmail);
+    
     if (userEmail && typeof userEmail === 'string') {
       const dbUser = await storage.getUserByEmail(userEmail);
+      console.log('[AUTH] After refresh - Database user found:', dbUser ? { id: dbUser.id, email: dbUser.email, role: dbUser.role } : 'null');
+      
       if (dbUser) {
         (req as any).user = {
           ...user,
@@ -201,7 +217,16 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
           email: dbUser.email,
           isActive: dbUser.isActive
         };
+        console.log('[AUTH] After refresh - Successfully attached DB user to req.user with role:', dbUser.role);
+      } else {
+        console.error('[AUTH] After refresh - Database user not found for email:', userEmail);
+        res.status(401).json({ message: "User not found in database after token refresh" });
+        return;
       }
+    } else {
+      console.error('[AUTH] After refresh - No email in refreshed token claims');
+      res.status(401).json({ message: "Invalid user claims after token refresh" });
+      return;
     }
     
     return next();
