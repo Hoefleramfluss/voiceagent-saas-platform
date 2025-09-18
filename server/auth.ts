@@ -292,11 +292,55 @@ export function setupAuth(app: Express) {
 }
 
 // Middleware to check authentication
-export function requireAuth(req: any, res: any, next: any) {
+export async function requireAuth(req: any, res: any, next: any) {
   if (!req.isAuthenticated()) {
     return res.status(401).json({ message: "Authentication required" });
   }
-  next();
+
+  // Ensure user has complete database information (especially role)
+  try {
+    const user = req.user;
+    
+    // If user already has database properties, continue
+    if (user && user.role && user.id) {
+      console.log('[AUTH] User already has DB properties - role:', user.role);
+      return next();
+    }
+    
+    // Otherwise, fetch from database using email
+    const userEmail = user?.email || user?.claims?.email;
+    console.log('[AUTH] requireAuth: Fetching user from database for email:', userEmail);
+    
+    if (userEmail) {
+      const dbUser = await storage.getUserByEmail(userEmail);
+      console.log('[AUTH] requireAuth: Database user found:', dbUser ? { id: dbUser.id, email: dbUser.email, role: dbUser.role } : 'null');
+      
+      if (dbUser) {
+        // Merge database user info into req.user
+        req.user = {
+          ...user,
+          id: dbUser.id,
+          role: dbUser.role,
+          tenantId: dbUser.tenantId,
+          email: dbUser.email,
+          isActive: dbUser.isActive,
+          firstName: dbUser.firstName,
+          lastName: dbUser.lastName
+        };
+        console.log('[AUTH] requireAuth: Successfully merged DB user with role:', dbUser.role);
+        return next();
+      } else {
+        console.error('[AUTH] requireAuth: Database user not found for email:', userEmail);
+        return res.status(401).json({ message: "User not found in database" });
+      }
+    } else {
+      console.error('[AUTH] requireAuth: No email found in user object');
+      return res.status(401).json({ message: "Invalid user session" });
+    }
+  } catch (error) {
+    console.error('[AUTH] requireAuth: Error fetching user from database:', error);
+    return res.status(500).json({ message: "Database error during authentication" });
+  }
 }
 
 // Middleware to check role
