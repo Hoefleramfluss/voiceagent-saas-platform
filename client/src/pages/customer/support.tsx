@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import type { SupportTicketsResponse } from "@shared/api-types";
 import CustomerSidebar from "@/components/customer-sidebar";
 import { Button } from "@/components/ui/button";

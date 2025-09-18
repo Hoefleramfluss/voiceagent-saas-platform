@@ -1,26 +1,15 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, Bot, Shield, Users, BarChart } from "lucide-react";
+import { Bot, Shield, Users, BarChart } from "lucide-react";
 
 export default function AuthPage() {
   const [, navigate] = useLocation();
   const { t } = useTranslation();
-  const { user, loginMutation, registerMutation } = useAuth();
-  const [loginData, setLoginData] = useState({ email: "", password: "" });
-  const [registerData, setRegisterData] = useState({
-    email: "",
-    password: "",
-    confirmPassword: "",
-    firstName: "",
-    lastName: "",
-  });
+  const { user } = useAuth();
 
   useEffect(() => {
     if (user) {
@@ -32,23 +21,10 @@ export default function AuthPage() {
     }
   }, [user, navigate]);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    loginMutation.mutate(loginData);
+  const handleLogin = () => {
+    // Redirect to Replit Auth login
+    window.location.assign("/api/login");
   };
-
-  const handleRegister = (e: React.FormEvent) => {
-    e.preventDefault();
-    registerMutation.mutate(registerData);
-  };
-
-  if (user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -66,176 +42,89 @@ export default function AuthPage() {
           </div>
 
           <Card>
-            <Tabs defaultValue="login" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login" data-testid="tab-login">{t('signIn')}</TabsTrigger>
-                <TabsTrigger value="register" data-testid="tab-register">{t('register')}</TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="login">
-                <CardHeader>
-                  <CardTitle>{t('signInToAccount')}</CardTitle>
-                  <CardDescription>
-                    {t('enterCredentials')}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={handleLogin} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="login-email">{t('email')}</Label>
-                      <Input
-                        id="login-email"
-                        type="email"
-                        placeholder="admin@voiceagent.com"
-                        value={loginData.email}
-                        onChange={(e) => setLoginData({ ...loginData, email: e.target.value })}
-                        required
-                        data-testid="input-login-email"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="login-password">{t('password')}</Label>
-                      <Input
-                        id="login-password"
-                        type="password"
-                        value={loginData.password}
-                        onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
-                        required
-                        data-testid="input-login-password"
-                      />
-                    </div>
-                    <Button
-                      type="submit"
-                      className="w-full"
-                      disabled={loginMutation.isPending}
-                      data-testid="button-login"
-                    >
-                      {loginMutation.isPending ? (
-                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      ) : null}
-                      {t('signIn')}
-                    </Button>
-                  </form>
-                </CardContent>
-              </TabsContent>
-
-              <TabsContent value="register">
-                <CardHeader>
-                  <CardTitle>{t('createAccount')}</CardTitle>
-                  <CardDescription>
-                    {t('startToday')}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={handleRegister} className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="register-firstname">{t('firstName')}</Label>
-                        <Input
-                          id="register-firstname"
-                          placeholder="John"
-                          value={registerData.firstName}
-                          onChange={(e) => setRegisterData({ ...registerData, firstName: e.target.value })}
-                          data-testid="input-register-firstname"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="register-lastname">{t('lastName')}</Label>
-                        <Input
-                          id="register-lastname"
-                          placeholder="Doe"
-                          value={registerData.lastName}
-                          onChange={(e) => setRegisterData({ ...registerData, lastName: e.target.value })}
-                          data-testid="input-register-lastname"
-                        />
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="register-email">{t('email')}</Label>
-                      <Input
-                        id="register-email"
-                        type="email"
-                        placeholder="john@company.com"
-                        value={registerData.email}
-                        onChange={(e) => setRegisterData({ ...registerData, email: e.target.value })}
-                        required
-                        data-testid="input-register-email"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="register-password">{t('password')}</Label>
-                      <Input
-                        id="register-password"
-                        type="password"
-                        value={registerData.password}
-                        onChange={(e) => setRegisterData({ ...registerData, password: e.target.value })}
-                        required
-                        data-testid="input-register-password"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="register-confirm">{t('confirmPassword')}</Label>
-                      <Input
-                        id="register-confirm"
-                        type="password"
-                        value={registerData.confirmPassword}
-                        onChange={(e) => setRegisterData({ ...registerData, confirmPassword: e.target.value })}
-                        required
-                        data-testid="input-register-confirm"
-                      />
-                    </div>
-                    <Button
-                      type="submit"
-                      className="w-full"
-                      disabled={registerMutation.isPending}
-                      data-testid="button-register"
-                    >
-                      {registerMutation.isPending ? (
-                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      ) : null}
-                      {t('createAccountButton')}
-                    </Button>
-                  </form>
-                </CardContent>
-              </TabsContent>
-            </Tabs>
+            <CardHeader>
+              <CardTitle className="text-center">{t('signIn')}</CardTitle>
+              <CardDescription className="text-center">
+                Sign in with your Replit account to access the VoiceAgent platform
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                onClick={handleLogin}
+                className="w-full"
+                size="lg"
+                data-testid="button-login-replit"
+              >
+                <Bot className="w-4 h-4 mr-2" />
+                Log in with Replit
+              </Button>
+            </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* Right side - Hero section */}
-      <div className="hidden lg:flex flex-1 bg-primary/5 items-center justify-center p-12">
-        <div className="max-w-md text-center">
-          <div className="w-20 h-20 bg-primary rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <Bot className="w-10 h-10 text-primary-foreground" />
-          </div>
-          <h1 className="text-3xl font-bold text-foreground mb-6">
-            {t('fullVoiceBotPlatform')}
-          </h1>
-          <div className="space-y-4 text-left">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                <Shield className="w-4 h-4 text-primary" />
+      {/* Right side - Features showcase */}
+      <div className="hidden lg:flex lg:flex-1 lg:flex-col lg:justify-center lg:px-8 lg:py-12 bg-muted/30">
+        <div className="mx-auto max-w-lg">
+          <h3 className="text-2xl font-bold text-foreground mb-8">
+            {t('powerfulFeatures')}
+          </h3>
+          
+          <div className="space-y-6">
+            <div className="flex items-start space-x-4">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <Bot className="w-5 h-5 text-primary" />
               </div>
-              <span className="text-muted-foreground">{t('multiTenantArchitecture')}</span>
+              <div>
+                <h4 className="font-semibold text-foreground mb-1">
+                  {t('smartVoiceBots')}
+                </h4>
+                <p className="text-muted-foreground text-sm">
+                  {t('createIntelligentBots')}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                <Users className="w-4 h-4 text-primary" />
+
+            <div className="flex items-start space-x-4">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <BarChart className="w-5 h-5 text-primary" />
               </div>
-              <span className="text-muted-foreground">{t('customerManagement')}</span>
+              <div>
+                <h4 className="font-semibold text-foreground mb-1">
+                  {t('detailedAnalytics')}
+                </h4>
+                <p className="text-muted-foreground text-sm">
+                  {t('trackPerformance')}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                <BarChart className="w-4 h-4 text-primary" />
+
+            <div className="flex items-start space-x-4">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <Shield className="w-5 h-5 text-primary" />
               </div>
-              <span className="text-muted-foreground">{t('usageTracking')}</span>
+              <div>
+                <h4 className="font-semibold text-foreground mb-1">
+                  {t('enterpriseSecurity')}
+                </h4>
+                <p className="text-muted-foreground text-sm">
+                  {t('bankGradeSecurity')}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                <Bot className="w-4 h-4 text-primary" />
+
+            <div className="flex items-start space-x-4">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <Users className="w-5 h-5 text-primary" />
               </div>
-              <span className="text-muted-foreground">{t('automatedDeployment')}</span>
+              <div>
+                <h4 className="font-semibold text-foreground mb-1">
+                  {t('teamCollaboration')}
+                </h4>
+                <p className="text-muted-foreground text-sm">
+                  {t('workTogether')}
+                </p>
+              </div>
             </div>
           </div>
         </div>
