@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import type { TenantsResponse, AdminBillingOverviewResponse, GenerateInvoiceResponse } from "@shared/api-types";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -22,7 +23,7 @@ import {
   Clock
 } from "lucide-react";
 
-export default function AdminBilling() {
+function AdminBillingContent() {
   const [selectedTenant, setSelectedTenant] = useState<string>("all");
   const [timeRange, setTimeRange] = useState<string>("month");
 
@@ -119,7 +120,8 @@ export default function AdminBilling() {
   }
 
   return (
-    <div className="flex bg-background min-h-screen">
+    <AdminGuard>
+      <div className="flex bg-background min-h-screen">
       <AdminSidebar />
       
       <div className="ml-72 flex-1">
@@ -434,6 +436,11 @@ export default function AdminBilling() {
           </div>
         </main>
       </div>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function AdminBilling() {
+  return <AdminBillingContent />;
 }

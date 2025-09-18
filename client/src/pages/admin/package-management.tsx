@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -66,7 +67,7 @@ const packageFormSchema = z.object({
 
 type PackageFormData = z.infer<typeof packageFormSchema>;
 
-export default function PackageManagement() {
+function PackageManagementContent() {
   const { toast } = useToast();
   const [editingPlan, setEditingPlan] = useState<EnhancedSubscriptionPlan | null>(null);
   const [showDialog, setShowDialog] = useState(false);
@@ -200,7 +201,8 @@ export default function PackageManagement() {
   };
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <AdminGuard>
+      <div className="flex min-h-screen bg-background">
       <AdminSidebar />
       
       <main className="flex-1 p-8">
@@ -536,6 +538,11 @@ export default function PackageManagement() {
           </Card>
         </div>
       </main>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function PackageManagement() {
+  return <PackageManagementContent />;
 }

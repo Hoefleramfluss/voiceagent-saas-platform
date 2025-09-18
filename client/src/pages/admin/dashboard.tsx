@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import type { TenantsResponse, HealthResponse } from "@shared/api-types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +19,7 @@ import {
   ExternalLink
 } from "lucide-react";
 
-export default function AdminDashboard() {
+function AdminDashboardContent() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   
@@ -55,7 +56,8 @@ export default function AdminDashboard() {
   const callMinutes = 89456; // This would come from usage events
 
   return (
-    <div className="flex bg-background min-h-screen">
+    <AdminGuard>
+      <div className="flex bg-background min-h-screen">
       <AdminSidebar />
       
       {/* Main Content */}
@@ -313,6 +315,11 @@ export default function AdminDashboard() {
           </Card>
         </main>
       </div>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function AdminDashboard() {
+  return <AdminDashboardContent />;
 }

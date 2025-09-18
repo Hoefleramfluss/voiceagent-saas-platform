@@ -1,4 +1,4 @@
-import { useAuth } from "@/hooks/useAuth";
+import { useUserRole } from "@/hooks/useUserRole";
 import { useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,8 @@ import {
   User,
   Key,
   LogOut,
-  GitBranch
+  GitBranch,
+  ArrowRight
 } from "lucide-react";
 
 const getNavigation = (t: any) => [
@@ -29,8 +30,47 @@ const getAccountNavigation = (t: any) => [
 
 export default function CustomerSidebar() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, isCustomer, isLoading } = useUserRole();
   const [location, navigate] = useLocation();
+
+  // Don't render sidebar if user doesn't have customer access
+  if (isLoading) {
+    return (
+      <div className="fixed inset-y-0 left-0 z-50 w-72 bg-card border-r border-border">
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
+            <p className="text-sm text-muted-foreground">Lade...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isCustomer) {
+    return (
+      <div className="fixed inset-y-0 left-0 z-50 w-72 bg-card border-r border-border">
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center p-6">
+            <div className="w-16 h-16 bg-destructive/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Bot className="w-8 h-8 text-destructive" />
+            </div>
+            <h3 className="font-semibold mb-2">Zugriff verweigert</h3>
+            <p className="text-sm text-muted-foreground mb-4">Kunden-Berechtigung erforderlich</p>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => navigate("/admin")}
+              data-testid="button-to-admin-area"
+            >
+              <ArrowRight className="w-4 h-4 mr-2" />
+              Zum Admin-Bereich
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleLogout = () => {
     // Redirect to Replit Auth logout

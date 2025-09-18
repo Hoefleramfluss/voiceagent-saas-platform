@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -89,7 +90,7 @@ interface RetellAgent {
   lastUpdated: string;
 }
 
-export default function CustomerOpsPage() {
+function CustomerOpsPageContent() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
   const [isApplyUsageOpen, setIsApplyUsageOpen] = useState(false);
   const [isAgentEditorOpen, setIsAgentEditorOpen] = useState(false);
@@ -216,7 +217,8 @@ export default function CustomerOpsPage() {
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   return (
-    <div className="flex h-screen bg-background">
+    <AdminGuard>
+      <div className="flex h-screen bg-background">
       <AdminSidebar />
       
       <div className="flex-1 ml-72">
@@ -808,6 +810,11 @@ export default function CustomerOpsPage() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function CustomerOpsPage() {
+  return <CustomerOpsPageContent />;
 }

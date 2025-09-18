@@ -4,10 +4,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
+import { useUserRole } from "@/hooks/useUserRole";
 import { ProtectedRoute } from "./lib/protected-route";
 import { Redirect } from "wouter";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/auth-page";
+import UnauthorizedPage from "@/pages/unauthorized";
 import AdminDashboard from "@/pages/admin/dashboard";
 import AdminCustomers from "@/pages/admin/customers";
 import AdminBots from "@/pages/admin/bots";
@@ -24,7 +26,7 @@ import FlowBuilder from "@/pages/customer/flow-builder";
 import DemoSetup from "@/pages/demo-setup";
 
 function RoleBasedRedirect() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading } = useUserRole();
 
   if (isLoading) {
     return (
@@ -42,7 +44,7 @@ function RoleBasedRedirect() {
   }
 
   // Redirect based on user role
-  switch (user.role) {
+  switch (user?.role) {
     case 'platform_admin':
     case 'support':
       return <Redirect to="/admin" />;
@@ -55,7 +57,7 @@ function RoleBasedRedirect() {
 }
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading } = useUserRole();
 
   if (isLoading) {
     return (
@@ -101,6 +103,9 @@ function Router() {
           <ProtectedRoute path="/usage" component={CustomerUsage} roles={['customer_admin', 'customer_user']} />
           <ProtectedRoute path="/billing" component={CustomerBilling} roles={['customer_admin', 'customer_user']} />
           <ProtectedRoute path="/support" component={CustomerSupport} roles={['customer_admin', 'customer_user']} />
+          
+          {/* Unauthorized access page */}
+          <Route path="/unauthorized" component={UnauthorizedPage} />
           
           {/* Fallback to 404 */}
           <Route component={NotFound} />

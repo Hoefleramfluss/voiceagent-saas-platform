@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import AdminSidebar from "@/components/admin-sidebar";
+import AdminGuard from "@/components/AdminGuard";
 import type { SupportTicketsResponse } from "@shared/api-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +28,7 @@ import {
   Eye
 } from "lucide-react";
 
-export default function AdminSupport() {
+function AdminSupportContent() {
   const { toast } = useToast();
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<any>(null);
@@ -151,7 +152,8 @@ export default function AdminSupport() {
   }
 
   return (
-    <div className="flex bg-background min-h-screen">
+    <AdminGuard requireSupport>
+      <div className="flex bg-background min-h-screen">
       <AdminSidebar />
       
       <div className="ml-72 flex-1">
@@ -454,6 +456,11 @@ export default function AdminSupport() {
           </Dialog>
         </main>
       </div>
-    </div>
+      </div>
+    </AdminGuard>
   );
+}
+
+export default function AdminSupport() {
+  return <AdminSupportContent />;
 }
