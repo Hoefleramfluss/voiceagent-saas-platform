@@ -24,7 +24,7 @@ export const usageEventKindEnum = pgEnum('usage_event_kind', ['call', 'voice_bot
 export const invoiceStatusEnum = pgEnum('invoice_status', ['pending', 'paid', 'failed', 'cancelled']);
 export const supportTicketStatusEnum = pgEnum('support_ticket_status', ['open', 'in_progress', 'resolved', 'closed']);
 export const provisioningJobStatusEnum = pgEnum('provisioning_job_status', ['queued', 'in_progress', 'done', 'error']);
-export const apiKeyServiceTypeEnum = pgEnum('api_key_service_type', ['stripe', 'openai', 'twilio', 'google', 'elevenlabs', 'heroku']);
+export const apiKeyServiceTypeEnum = pgEnum('api_key_service_type', ['stripe', 'openai', 'twilio', 'google', 'elevenlabs', 'heroku', 'retell']);
 export const auditEventTypeEnum = pgEnum('audit_event_type', ['api_key_created', 'api_key_deleted', 'user_login', 'user_logout', 'password_change', 'role_change', 'sensitive_operation']);
 export const subscriptionPlanStatusEnum = pgEnum('subscription_plan_status', ['active', 'inactive', 'deprecated']);
 export const subscriptionStatusEnum = pgEnum('subscription_status', ['active', 'paused', 'canceled', 'expired']);
@@ -33,12 +33,14 @@ export const flowVersionStatusEnum = pgEnum('flow_version_status', ['draft', 'st
 export const connectorTypeEnum = pgEnum('connector_type', ['crm', 'calendar']);
 export const connectorProviderEnum = pgEnum('connector_provider', ['google_calendar', 'microsoft_graph', 'hubspot', 'salesforce', 'pipedrive']);
 
-// Tenants table
+// Tenants table (Customer Entity in API terms)
 export const tenants = pgTable("tenants", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name", { length: 255 }).notNull(),
   status: tenantStatusEnum("status").notNull().default('active'),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+  // Tenant Operations Dashboard - Billing
+  billingRunningBalanceCents: integer("billing_running_balance_cents").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
@@ -76,6 +78,8 @@ export const bots = pgTable("bots", {
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
   name: varchar("name", { length: 255 }).notNull(),
   status: botStatusEnum("status").notNull().default('pending'),
+  // Retell AI Integration - tenant-scoped agent ID
+  retellAgentId: varchar("retell_agent_id", { length: 255 }),
   twilioNumber: varchar("twilio_number", { length: 50 }),
   herokuAppName: varchar("heroku_app_name", { length: 255 }),
   locale: varchar("locale", { length: 10 }).notNull().default('de-AT'),
@@ -99,6 +103,24 @@ export const usageEvents = pgTable("usage_events", {
   metadata: jsonb("metadata"),
   timestamp: timestamp("timestamp").defaultNow().notNull()
 });
+
+// Usage minutes table - specific minute tracking for Tenant Ops Dashboard
+export const usageMinutes = pgTable("usage_minutes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  botId: uuid("bot_id").notNull().references(() => bots.id),
+  agentId: varchar("agent_id", { length: 255 }), // retellAgentId for correlation
+  minutesDecimal: decimal("minutes_decimal", { precision: 10, scale: 2 }).notNull(),
+  source: varchar("source", { length: 50 }).notNull().default('call'), // 'call', 'chat', etc.
+  periodStart: timestamp("period_start").notNull(),
+  periodEnd: timestamp("period_end").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull()
+}, (table) => [
+  index("idx_usage_minutes_tenant").on(table.tenantId),
+  index("idx_usage_minutes_bot").on(table.botId),
+  index("idx_usage_minutes_agent").on(table.agentId),
+  index("idx_usage_minutes_period").on(table.periodStart)
+]);
 
 // Subscription plans table
 export const subscriptionPlans = pgTable("subscription_plans", {
