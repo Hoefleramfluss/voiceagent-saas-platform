@@ -69,6 +69,7 @@ export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserCount(): Promise<number>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User>;
   updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User>;
@@ -298,6 +299,11 @@ export class DatabaseStorage implements IStorage {
     return user || undefined;
   }
 
+  async getUserCount(): Promise<number> {
+    const [result] = await db.select({ count: count() }).from(users);
+    return result?.count || 0;
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     return await withDatabaseRetry(async () => {
       const [user] = await db
@@ -371,6 +377,9 @@ export class DatabaseStorage implements IStorage {
     }
     
     return await withDatabaseRetry(async () => {
+      // Check if user already exists to preserve existing role
+      const existingUser = await this.getUserByEmail(userData.email!);
+      
       const [user] = await db
         .insert(users)
         .values({
@@ -378,6 +387,8 @@ export class DatabaseStorage implements IStorage {
           firstName: userData.firstName,
           lastName: userData.lastName,
           profileImageUrl: userData.profileImageUrl,
+          role: userData.role || existingUser?.role || 'customer_user', // Use passed role, existing role, or default
+          tenantId: userData.tenantId || existingUser?.tenantId, // Preserve tenantId if exists
           lastLoginAt: new Date(),
         })
         .onConflictDoUpdate({
@@ -386,6 +397,8 @@ export class DatabaseStorage implements IStorage {
             firstName: userData.firstName,
             lastName: userData.lastName,
             profileImageUrl: userData.profileImageUrl,
+            role: userData.role || existingUser?.role || 'customer_user', // Only update role if explicitly passed
+            tenantId: userData.tenantId || existingUser?.tenantId, // Preserve tenantId
             lastLoginAt: new Date(),
             updatedAt: new Date(),
           },

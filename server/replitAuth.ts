@@ -57,11 +57,24 @@ function updateUserSession(
 async function upsertUser(
   claims: any,
 ) {
+  const email = claims["email"];
+  
+  // Check if this is the first user in the system
+  const userCount = await storage.getUserCount();
+  
+  // Determine the role based on email or if first user
+  let role: 'platform_admin' | 'customer_user' = 'customer_user';
+  if (email === 'admin@voiceagent.local' || userCount === 0) {
+    role = 'platform_admin';
+    console.log(`[AUTH] Assigning platform_admin role to ${email} (first user: ${userCount === 0})`);
+  }
+  
   await storage.upsertUser({
-    email: claims["email"],
+    email: email,
     firstName: claims["first_name"],
     lastName: claims["last_name"],
     profileImageUrl: claims["profile_image_url"],
+    role: role
   });
 }
 
@@ -141,6 +154,26 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
 
   const now = Math.floor(Date.now() / 1000);
   if (now <= user.expires_at) {
+    // Fetch the full user from database to get role and other properties
+    try {
+      const userEmail = user.claims?.email;
+      if (userEmail) {
+        const dbUser = await storage.getUserByEmail(userEmail);
+        if (dbUser) {
+          // Attach database user info to req.user for downstream middleware
+          (req as any).user = {
+            ...user,
+            id: dbUser.id,
+            role: dbUser.role,
+            tenantId: dbUser.tenantId,
+            email: dbUser.email,
+            isActive: dbUser.isActive
+          };
+        }
+      }
+    } catch (error) {
+      console.error('[AUTH] Error fetching user from database:', error);
+    }
     return next();
   }
 
@@ -154,6 +187,23 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     const config = await getOidcConfig();
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
     updateUserSession(user, tokenResponse);
+    
+    // After refreshing token, also fetch user from database
+    const userEmail = tokenResponse.claims()?.email;
+    if (userEmail) {
+      const dbUser = await storage.getUserByEmail(userEmail);
+      if (dbUser) {
+        (req as any).user = {
+          ...user,
+          id: dbUser.id,
+          role: dbUser.role,
+          tenantId: dbUser.tenantId,
+          email: dbUser.email,
+          isActive: dbUser.isActive
+        };
+      }
+    }
+    
     return next();
   } catch (error) {
     res.status(401).json({ message: "Unauthorized" });
