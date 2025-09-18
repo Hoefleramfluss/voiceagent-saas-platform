@@ -104,11 +104,13 @@ export async function setupAuth(app: Express) {
 
   app.get("/api/login", (req, res, next) => {
     const domain = domains[0]; // Use first domain as fallback
+    console.log('[AUTH] Login attempt for domain:', domain);
     passport.authenticate(`replitauth:${domain}`, {
       prompt: "login consent",
       scope: ["openid", "email", "profile", "offline_access"],
     })(req, res, next);
   });
+  console.log('[AUTH] Registered /api/login endpoint');
 
   app.get("/api/callback", (req, res, next) => {
     const domain = domains[0]; // Use first domain as fallback

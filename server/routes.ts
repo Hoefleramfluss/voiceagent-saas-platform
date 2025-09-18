@@ -92,7 +92,8 @@ async function getStripe(): Promise<Stripe | null> {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
-  setupAuth(app);
+  await setupAuth(app);
+  console.log('[AUTH] Auth routes registered');
 
   // Replit Auth endpoints
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
