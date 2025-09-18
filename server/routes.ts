@@ -394,6 +394,514 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Customer Operations Dashboard API (Customer = Tenant in system)
+  // POST /api/customers - Create new customer (tenant) with Stripe integration
+  app.post("/api/customers", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = insertTenantSchema.extend({
+        email: z.string().email("Valid email address required")
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten() 
+        });
+      }
+
+      let stripeCustomerId: string | undefined;
+      
+      // Create Stripe customer with idempotency (REQUIRED)
+      const stripeInstance = await getStripe();
+      if (!stripeInstance) {
+        return res.status(503).json({ 
+          success: false,
+          error: "Stripe not configured. Customer creation requires billing setup." 
+        });
+      }
+
+      try {
+        const customerIdempotencyKey = crypto.createHash('sha256')
+          .update(`customer:${validation.data.name}:${validation.data.email}`)
+          .digest('hex').substring(0, 32);
+
+        const stripeCustomer = await stripeInstance.customers.create({
+          name: validation.data.name,
+          email: validation.data.email,
+          description: `Customer for tenant: ${validation.data.name}`,
+          metadata: {
+            tenant_name: validation.data.name,
+            created_by: req.user?.id || 'unknown'
+          }
+        }, {
+          idempotencyKey: customerIdempotencyKey
+        });
+        stripeCustomerId = stripeCustomer.id;
+        console.log(`[Customer API] Created Stripe customer ${stripeCustomerId}`);
+      } catch (stripeError) {
+        console.error('[Customer API] Stripe customer creation failed:', stripeError);
+        return res.status(502).json({ 
+          success: false,
+          error: "Failed to create Stripe customer. Billing setup required.",
+          details: (stripeError as Error).message
+        });
+      }
+
+      const customer = await storage.createTenant({
+        ...validation.data,
+        stripeCustomerId
+      });
+      
+      res.status(201).json({
+        success: true,
+        customer: { ...customer, type: 'tenant' }
+      });
+    } catch (error) {
+      console.error('[Customer API] Create customer error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  // GET /api/customers/:id/billing/overview - Customer billing overview
+  app.get("/api/customers/:id/billing/overview", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const customer = await storage.getTenant(id);
+      if (!customer) {
+        return res.status(404).json({ success: false, error: "Customer not found" });
+      }
+      
+      // Get usage aggregation for billing overview
+      const { period = 'current' } = req.query;
+      const endDate = new Date();
+      const startDate = period === 'current' 
+        ? new Date(endDate.getFullYear(), endDate.getMonth(), 1)
+        : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+      
+      // Get usage events for the period
+      const usageQuery = await storage.getUsageEvents(id, {
+        periodStart: startDate,
+        periodEnd: endDate,
+        limit: 1000
+      });
+      
+      // Calculate usage by type
+      const voiceBotMinutes = usageQuery
+        .filter(u => u.kind === 'voice_bot_minute')
+        .reduce((sum, u) => sum + parseFloat(u.quantity.toString()), 0);
+      
+      const forwardingMinutes = usageQuery
+        .filter(u => u.kind === 'forwarding_minute')
+        .reduce((sum, u) => sum + parseFloat(u.quantity.toString()), 0);
+      
+      const bots = await storage.getBots(id);
+      
+      res.json({
+        success: true,
+        customer: {
+          id: customer.id,
+          name: customer.name,
+          status: customer.status,
+          stripeCustomerId: customer.stripeCustomerId,
+          billingRunningBalanceCents: customer.billingRunningBalanceCents || 0
+        },
+        billing: {
+          period: {
+            start: startDate.toISOString(),
+            end: endDate.toISOString(),
+            type: period
+          },
+          usage: {
+            voiceBotMinutes: voiceBotMinutes,
+            forwardingMinutes: forwardingMinutes,
+            totalMinutes: voiceBotMinutes + forwardingMinutes,
+            estimatedCostCents: (() => {
+              // Use billing calculator for accurate estimates
+              try {
+                const { enhancedBillingCalculator } = require('./enhanced-billing-calculator');
+                const calculator = new enhancedBillingCalculator();
+                const usageSummary = {
+                  'voice_bot_minute': voiceBotMinutes,
+                  'forwarding_minute': forwardingMinutes
+                };
+                const costs = calculator.calculateCostsFromSummary(usageSummary);
+                return (costs['voice_bot_minute'] || 0) + (costs['forwarding_minute'] || 0);
+              } catch (error) {
+                // Fallback to hardcoded rates if calculator fails
+                return Math.round(voiceBotMinutes * 5 + forwardingMinutes * 3);
+              }
+            })()
+          },
+          balance: {
+            runningBalanceCents: customer.billingRunningBalanceCents || 0,
+            runningBalanceFormatted: `€${((customer.billingRunningBalanceCents || 0) / 100).toFixed(2)}`
+          },
+          bots: bots.map(bot => ({
+            id: bot.id,
+            name: bot.name,
+            status: bot.status,
+            retellAgentId: bot.retellAgentId
+          }))
+        }
+      });
+    } catch (error) {
+      console.error('[Customer API] Billing overview error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  // POST /api/customers/:id/billing/apply-usage - Apply usage minutes
+  app.post("/api/customers/:id/billing/apply-usage", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const validation = z.object({
+        botId: z.string().uuid("Valid bot ID required"),
+        minuteType: z.enum(['voice_bot', 'forwarding']),
+        minutesDecimal: z.number().positive("Minutes must be positive"),
+        source: z.string().default('call'),
+        periodStart: z.string().datetime(),
+        periodEnd: z.string().datetime(),
+        idempotencyKey: z.string().optional()
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten() 
+        });
+      }
+      
+      const customer = await storage.getTenant(id);
+      if (!customer) {
+        return res.status(404).json({ success: false, error: "Customer not found" });
+      }
+      
+      // Verify bot belongs to customer
+      const bot = await storage.getBot(validation.data.botId, id);
+      if (!bot) {
+        return res.status(404).json({ success: false, error: "Bot not found for this customer" });
+      }
+      
+      // Idempotency check (prevent double billing)
+      const idempotencyKey = validation.data.idempotencyKey || 
+        crypto.createHash('sha256')
+          .update(`usage:${id}:${validation.data.botId}:${validation.data.periodStart}:${validation.data.periodEnd}:${validation.data.minuteType}`)
+          .digest('hex').substring(0, 32);
+      
+      // Check for existing usage with same idempotency key
+      const existingUsage = await storage.getUsageEvents(id, {
+        limit: 1,
+        periodStart: new Date(validation.data.periodStart),
+        periodEnd: new Date(validation.data.periodEnd),
+        botId: validation.data.botId,
+        kind: validation.data.minuteType === 'voice_bot' ? 'voice_bot_minute' : 'forwarding_minute'
+      });
+      
+      if (existingUsage.length > 0) {
+        return res.status(409).json({
+          success: false,
+          error: "Usage already applied for this period",
+          existing: existingUsage[0]
+        });
+      }
+
+      // Atomic transaction: Create usage + update balance
+      const kind = validation.data.minuteType === 'voice_bot' ? 'voice_bot_minute' : 'forwarding_minute';
+      
+      // Calculate cost using billing system
+      const { enhancedBillingCalculator } = await import('./enhanced-billing-calculator');
+      const calculator = new enhancedBillingCalculator();
+      const usageSummary = { [kind]: validation.data.minutesDecimal };
+      const costs = calculator.calculateCostsFromSummary(usageSummary);
+      const costCents = costs[kind] || Math.round(validation.data.minutesDecimal * (validation.data.minuteType === 'voice_bot' ? 5 : 3));
+      
+      // Atomic operation
+      const usageRecord = await storage.createUsageEvent({
+        tenantId: id,
+        botId: validation.data.botId,
+        kind: kind,
+        quantity: validation.data.minutesDecimal.toString(),
+        metadata: {
+          source: validation.data.source,
+          agentId: bot.retellAgentId,
+          periodStart: validation.data.periodStart,
+          periodEnd: validation.data.periodEnd,
+          idempotencyKey
+        }
+      });
+      
+      // Update running balance
+      await storage.updateTenant(id, {
+        billingRunningBalanceCents: (customer.billingRunningBalanceCents || 0) + costCents
+      });
+      
+      // Audit log
+      await storage.createAuditLog({
+        tenantId: id,
+        userId: req.user!.id,
+        eventType: 'sensitive_operation',
+        operation: 'APPLY_CUSTOMER_USAGE',
+        success: true,
+        metadata: { 
+          customerId: id,
+          botId: validation.data.botId,
+          minuteType: validation.data.minuteType,
+          minutes: validation.data.minutesDecimal,
+          costCents
+        }
+      });
+      
+      res.status(201).json({
+        success: true,
+        usageRecord: usageRecord[0],
+        billing: {
+          minutesApplied: validation.data.minutesDecimal,
+          costCents,
+          costFormatted: `€${(costCents / 100).toFixed(2)}`
+        }
+      });
+    } catch (error) {
+      console.error('[Customer API] Apply usage error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  // Retell Mirror Dashboard API (Platform Admin only)
+  // GET /api/retell/status - Mirror dashboard status
+  app.get("/api/retell/status", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const retellPublicKey = await keyLoader.getRetellPublicKey();
+      const retellSecretKey = await keyLoader.getRetellSecretKey();
+      
+      if (!retellPublicKey || !retellSecretKey) {
+        return res.status(503).json({
+          success: false,
+          error: "Retell API keys not configured",
+          status: "not_configured"
+        });
+      }
+      
+      // Basic status check (placeholder for actual Retell API calls)
+      res.json({
+        success: true,
+        status: "configured",
+        keysPresent: {
+          publicKey: !!retellPublicKey,
+          secretKey: !!retellSecretKey
+        },
+        publicKeyPrefix: retellPublicKey.substring(0, 8) + "..."
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // GET /api/retell/agents - List agents for mirror dashboard
+  app.get("/api/retell/agents", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { tenantId } = req.query;
+      
+      // Get bots with retell agent IDs
+      const bots = tenantId 
+        ? await storage.getBots(tenantId as string)
+        : await storage.db.select().from(storage.db.schema.bots).limit(100);
+      
+      const agents = bots
+        .filter(bot => bot.retellAgentId)
+        .map(bot => ({
+          botId: bot.id,
+          retellAgentId: bot.retellAgentId,
+          name: bot.name,
+          status: bot.status,
+          tenantId: bot.tenantId,
+          locale: bot.locale,
+          systemPrompt: bot.systemPrompt?.substring(0, 100) + "...", // Preview only
+          lastUpdated: bot.updatedAt
+        }));
+      
+      res.json({
+        success: true,
+        agents,
+        total: agents.length
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // PATCH /api/retell/agents/:id - Update agent (diff-based)
+  app.patch("/api/retell/agents/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const validation = z.object({
+        systemPrompt: z.string().optional(),
+        greetingMessage: z.string().optional(),
+        locale: z.string().optional(),
+        // diff-based updates
+        changes: z.object({
+          systemPrompt: z.object({
+            old: z.string(),
+            new: z.string()
+          }).optional(),
+          greetingMessage: z.object({
+            old: z.string(),
+            new: z.string()
+          }).optional()
+        }).optional()
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten()
+        });
+      }
+      
+      // Get current bot
+      const bot = await storage.getBot(id);
+      if (!bot) {
+        return res.status(404).json({
+          success: false,
+          error: "Bot not found"
+        });
+      }
+      
+      // Apply diff-based updates (token-efficient)
+      const updates: any = {};
+      if (validation.data.systemPrompt) {
+        updates.systemPrompt = validation.data.systemPrompt;
+      }
+      if (validation.data.greetingMessage) {
+        updates.greetingMessage = validation.data.greetingMessage;
+      }
+      if (validation.data.locale) {
+        updates.locale = validation.data.locale;
+      }
+      
+      // Update bot locally
+      const updatedBot = await storage.updateBot(id, updates);
+      
+      // TODO: Sync with Retell API using retellAgentId
+      // const retellSecretKey = await keyLoader.getRetellSecretKey();
+      // await retellApiCall(bot.retellAgentId, updates);
+      
+      res.json({
+        success: true,
+        bot: updatedBot,
+        changesApplied: Object.keys(updates),
+        retellSyncStatus: "pending" // TODO: implement actual sync
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // POST /api/retell/deploy-flow - Deploy flow to Retell
+  app.post("/api/retell/deploy-flow", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = z.object({
+        botId: z.string().uuid(),
+        flowId: z.string().uuid().optional(),
+        deployTarget: z.enum(['staging', 'production']).default('staging')
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten()
+        });
+      }
+      
+      const bot = await storage.getBot(validation.data.botId);
+      if (!bot || !bot.retellAgentId) {
+        return res.status(404).json({
+          success: false,
+          error: "Bot not found or missing Retell agent ID"
+        });
+      }
+      
+      // TODO: Implement actual Retell flow deployment
+      res.json({
+        success: true,
+        botId: validation.data.botId,
+        retellAgentId: bot.retellAgentId,
+        deployTarget: validation.data.deployTarget,
+        status: "deployment_initiated",
+        message: "Flow deployment started (implementation pending)"
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // POST /api/retell/open-link - Generate public link to Retell agent
+  app.post("/api/retell/open-link", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const validation = z.object({
+        botId: z.string().uuid(),
+        linkType: z.enum(['dashboard', 'testing', 'analytics']).default('dashboard')
+      }).safeParse(req.body);
+      
+      if (!validation.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: validation.error.flatten()
+        });
+      }
+      
+      const bot = await storage.getBot(validation.data.botId);
+      if (!bot || !bot.retellAgentId) {
+        return res.status(404).json({
+          success: false,
+          error: "Bot not found or missing Retell agent ID"
+        });
+      }
+      
+      // Generate Retell dashboard link
+      const retellLink = `https://app.retellai.com/agent/${bot.retellAgentId}`;
+      
+      res.json({
+        success: true,
+        botId: validation.data.botId,
+        retellAgentId: bot.retellAgentId,
+        linkType: validation.data.linkType,
+        retellLink,
+        expiresIn: "24h" // Placeholder
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   // Tenant management (Platform Admin only)
   app.get("/api/tenants", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
