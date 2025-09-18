@@ -15,6 +15,7 @@ import AdminBilling from "@/pages/admin/billing";
 import AdminSupport from "@/pages/admin/support";
 import AdminSettings from "@/pages/admin/settings";
 import PackageManagement from "@/pages/admin/package-management";
+import CustomerOps from "@/pages/admin/customer-ops";
 import CustomerDashboard from "@/pages/customer/dashboard";
 import CustomerUsage from "@/pages/customer/usage";
 import CustomerBilling from "@/pages/customer/billing-enhanced";
@@ -85,6 +86,7 @@ function Router() {
           <ProtectedRoute path="/admin/bots" component={AdminBots} roles={['platform_admin']} />
           <ProtectedRoute path="/admin/billing" component={AdminBilling} roles={['platform_admin']} />
           <ProtectedRoute path="/admin/packages" component={PackageManagement} roles={['platform_admin']} />
+          <ProtectedRoute path="/admin/customer-ops" component={CustomerOps} roles={['platform_admin']} />
           <ProtectedRoute path="/admin/support" component={AdminSupport} roles={['platform_admin', 'support']} />
           <ProtectedRoute path="/admin/settings" component={AdminSettings} roles={['platform_admin']} />
           

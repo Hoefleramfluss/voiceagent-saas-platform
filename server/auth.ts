@@ -106,7 +106,13 @@ export function setupAuth(app: Express) {
             return done(null, false);
           }
           
-          const isValid = await comparePasswords(password, user.password);
+          // Check if user has password (some auth methods might not use passwords)
+          const userPassword = (user as any).password;
+          if (!userPassword) {
+            return done(null, false);
+          }
+          
+          const isValid = await comparePasswords(password, userPassword);
           if (!isValid) {
             return done(null, false);
           }

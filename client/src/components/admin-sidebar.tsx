@@ -12,7 +12,8 @@ import {
   Server, 
   FileText,
   LogOut,
-  Package
+  Package,
+  Monitor
 } from "lucide-react";
 
 const getNavigation = (t: any) => [
@@ -20,6 +21,7 @@ const getNavigation = (t: any) => [
   { name: t('customers'), href: "/admin/customers", icon: Users },
   { name: t('voiceBots'), href: "/admin/bots", icon: Bot },
   { name: t('billing'), href: "/admin/billing", icon: Receipt },
+  { name: "Customer Ops", href: "/admin/customer-ops", icon: Monitor },
   { name: "Paket-Verwaltung", href: "/admin/packages", icon: Package },
   { name: t('support'), href: "/admin/support", icon: Headphones },
   { name: t('settings'), href: "/admin/settings", icon: Settings },
