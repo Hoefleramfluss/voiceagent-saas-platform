@@ -30,7 +30,9 @@ app.use('/telephony', express.urlencoded({
 }));
 
 // Regular JSON and URL-encoded body parsing for other routes with size limits
-const bodyLimit = process.env.NODE_ENV === 'production' ? '1mb' : '10mb';
+const NODE_ENV = process.env.NODE_ENV || 'production';
+const bodyLimit = NODE_ENV === 'production' ? '1mb' : '10mb';
+console.log(`[STARTUP] Environment: ${NODE_ENV}`);
 app.use(express.json({ limit: bodyLimit }));
 app.use(express.urlencoded({ extended: false, limit: bodyLimit }));
 
