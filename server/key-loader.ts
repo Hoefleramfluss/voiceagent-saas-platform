@@ -160,6 +160,54 @@ class SecureKeyLoader {
            this.getApiKey('stripe', 'STRIPE_WEBHOOK_ENDPOINT_SECRET');
   }
 
+  // === RETELL AI Methods (Global Account) ===
+  
+  async getRetellPublicKey(): Promise<string | null> {
+    // Try database first, then environment fallback
+    const dbKey = await this.getApiKey('retell', 'RETELL_PUBLIC_KEY');
+    if (dbKey && dbKey.startsWith('agent_')) {
+      console.log('[KeyLoader] ✅ Using valid Retell public key from database');
+      return dbKey;
+    }
+    
+    // Fallback to environment variable
+    if (process.env.RETELL_PUBLIC_KEY) {
+      const envKey = process.env.RETELL_PUBLIC_KEY;
+      if (envKey.startsWith('agent_')) {
+        console.log('[KeyLoader] ✅ Using valid Retell public key from environment');
+        return envKey;
+      } else {
+        console.warn(`[KeyLoader] Environment RETELL_PUBLIC_KEY has invalid format (should start with 'agent_')`);
+      }
+    }
+    
+    console.error('[KeyLoader] ❌ No valid Retell public key found in database or environment');
+    return null;
+  }
+  
+  async getRetellSecretKey(): Promise<string | null> {
+    // Only use secret keys for server-side operations
+    const secretKey = await this.getApiKey('retell', 'RETELL_SECRET_KEY');
+    if (secretKey && secretKey.startsWith('sk_')) {
+      console.log('[KeyLoader] ✅ Using valid Retell secret key from database');
+      return secretKey;
+    }
+    
+    // Fallback to environment variable (must be secret key)
+    if (process.env.RETELL_SECRET_KEY) {
+      const envKey = process.env.RETELL_SECRET_KEY;
+      if (envKey.startsWith('sk_')) {
+        console.log('[KeyLoader] ✅ Using valid Retell secret key from environment');
+        return envKey;
+      } else {
+        console.error(`[KeyLoader] Environment RETELL_SECRET_KEY is not a secret key (should start with 'sk_')`);
+      }
+    }
+    
+    console.error('[KeyLoader] ❌ No valid Retell secret key found in database or environment');
+    return null;
+  }
+
   /**
    * Get Heroku API key
    */
