@@ -65,6 +65,8 @@ async function upsertUser(
   });
 }
 
+const domains = process.env.REPLIT_DOMAINS?.split(",") || ["localhost:5000"];
+
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
   app.use(getSession());
@@ -83,7 +85,6 @@ export async function setupAuth(app: Express) {
     verified(null, user);
   };
 
-  const domains = process.env.REPLIT_DOMAINS?.split(",") || ["localhost:5000"];
   console.log("[AUTH] Configuring domains:", domains);
   for (const domain of domains) {
     const strategy = new Strategy(
