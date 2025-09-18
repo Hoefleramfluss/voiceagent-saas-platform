@@ -1,8 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import Stripe from "stripe";
-import { setupAuth, requireAuth, requireRole, requireTenantAccess } from "./auth";
-import { hashPassword } from "./auth";
+import { setupAuth, isAuthenticated } from "./replitAuth";
+// Legacy auth functions still needed during transition
+import { requireAuth, requireRole, requireTenantAccess, hashPassword } from "./auth";
 import { storage } from "./storage";
 import { insertTenantSchema, insertBotSchema, insertSupportTicketSchema, insertApiKeySchema, insertUsageEventSchema, insertPhoneNumberMappingSchema, updatePhoneNumberMappingSchema, insertFlowSchema } from "@shared/schema";
 import { z } from "zod";
@@ -93,6 +94,41 @@ async function getStripe(): Promise<Stripe | null> {
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
+
+  // Replit Auth endpoints
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+    try {
+      const userEmail = req.user.claims.email;
+      if (!userEmail) {
+        return res.status(401).json({ message: "Invalid user claims" });
+      }
+      
+      const user = await storage.getUserByEmail(userEmail);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Return only safe user profile data
+      const safeUserProfile = {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        profileImageUrl: user.profileImageUrl,
+        role: user.role,
+        tenantId: user.tenantId,
+        isActive: user.isActive,
+        lastLoginAt: user.lastLoginAt,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      };
+      
+      res.json(safeUserProfile);
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
 
   // Apply enterprise hardening security controls
   const { 
