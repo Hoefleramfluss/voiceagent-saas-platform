@@ -21,6 +21,7 @@ export const userRoleEnum = pgEnum('user_role', ['platform_admin', 'customer_adm
 export const tenantStatusEnum = pgEnum('tenant_status', ['active', 'suspended', 'trial']);
 export const botStatusEnum = pgEnum('bot_status', ['pending', 'provisioning', 'ready', 'failed', 'suspended']);
 export const usageEventKindEnum = pgEnum('usage_event_kind', ['call', 'voice_bot_minute', 'forwarding_minute', 'stt_req', 'tts_char', 'gpt_tokens']);
+export const minuteTypeEnum = pgEnum('minute_type', ['voice_bot', 'forwarding']);
 export const invoiceStatusEnum = pgEnum('invoice_status', ['pending', 'paid', 'failed', 'cancelled']);
 export const supportTicketStatusEnum = pgEnum('support_ticket_status', ['open', 'in_progress', 'resolved', 'closed']);
 export const provisioningJobStatusEnum = pgEnum('provisioning_job_status', ['queued', 'in_progress', 'done', 'error']);
@@ -110,16 +111,18 @@ export const usageMinutes = pgTable("usage_minutes", {
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
   botId: uuid("bot_id").notNull().references(() => bots.id),
   agentId: varchar("agent_id", { length: 255 }), // retellAgentId for correlation
+  minuteType: minuteTypeEnum("minute_type").notNull(), // voice_bot vs forwarding for billing
   minutesDecimal: decimal("minutes_decimal", { precision: 10, scale: 2 }).notNull(),
   source: varchar("source", { length: 50 }).notNull().default('call'), // 'call', 'chat', etc.
   periodStart: timestamp("period_start").notNull(),
   periodEnd: timestamp("period_end").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull()
 }, (table) => [
-  index("idx_usage_minutes_tenant").on(table.tenantId),
+  index("idx_usage_minutes_tenant_type").on(table.tenantId, table.minuteType),
   index("idx_usage_minutes_bot").on(table.botId),
   index("idx_usage_minutes_agent").on(table.agentId),
-  index("idx_usage_minutes_period").on(table.periodStart)
+  index("idx_usage_minutes_period").on(table.tenantId, table.periodStart),
+  uniqueIndex("idx_usage_minutes_unique").on(table.tenantId, table.botId, table.agentId, table.minuteType, table.periodStart, table.periodEnd)
 ]);
 
 // Subscription plans table
@@ -524,6 +527,11 @@ export const insertUsageEventSchema = createInsertSchema(usageEvents).omit({
   timestamp: true
 });
 
+export const insertUsageMinutesSchema = createInsertSchema(usageMinutes).omit({
+  id: true,
+  createdAt: true
+});
+
 export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit({
   id: true,
   createdAt: true,
@@ -657,6 +665,8 @@ export type Bot = typeof bots.$inferSelect;
 export type InsertBot = z.infer<typeof insertBotSchema>;
 export type UsageEvent = typeof usageEvents.$inferSelect;
 export type InsertUsageEvent = z.infer<typeof insertUsageEventSchema>;
+export type UsageMinutes = typeof usageMinutes.$inferSelect;
+export type InsertUsageMinutes = z.infer<typeof insertUsageMinutesSchema>;
 export type SupportTicket = typeof supportTickets.$inferSelect;
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
 export type ProvisioningJob = typeof provisioningJobs.$inferSelect;
