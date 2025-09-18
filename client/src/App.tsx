@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
 import { ProtectedRoute } from "./lib/protected-route";
+import { Redirect } from "wouter";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/auth-page";
 import AdminDashboard from "@/pages/admin/dashboard";
@@ -20,6 +21,37 @@ import CustomerBilling from "@/pages/customer/billing-enhanced";
 import CustomerSupport from "@/pages/customer/support";
 import FlowBuilder from "@/pages/customer/flow-builder";
 import DemoSetup from "@/pages/demo-setup";
+
+function RoleBasedRedirect() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  // Redirect based on user role
+  switch (user.role) {
+    case 'platform_admin':
+    case 'support':
+      return <Redirect to="/admin" />;
+    case 'customer_admin':
+    case 'customer_user':
+      return <Redirect to="/dashboard" />;
+    default:
+      return <Redirect to="/admin" />; // Fallback to admin for unknown roles
+  }
+}
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -56,8 +88,13 @@ function Router() {
           <ProtectedRoute path="/admin/support" component={AdminSupport} roles={['platform_admin', 'support']} />
           <ProtectedRoute path="/admin/settings" component={AdminSettings} roles={['platform_admin']} />
           
-          {/* Customer routes - home page when logged in */}
-          <ProtectedRoute path="/" component={CustomerDashboard} roles={['customer_admin', 'customer_user']} />
+          {/* Home page - smart redirect based on role */}
+          <Route path="/">
+            <RoleBasedRedirect />
+          </Route>
+          
+          {/* Customer routes */}
+          <ProtectedRoute path="/dashboard" component={CustomerDashboard} roles={['customer_admin', 'customer_user']} />
           <ProtectedRoute path="/flows" component={FlowBuilder} roles={['customer_admin', 'customer_user']} />
           <ProtectedRoute path="/usage" component={CustomerUsage} roles={['customer_admin', 'customer_user']} />
           <ProtectedRoute path="/billing" component={CustomerBilling} roles={['customer_admin', 'customer_user']} />
