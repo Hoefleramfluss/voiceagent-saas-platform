@@ -1,4 +1,4 @@
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
 import { Button } from "@/components/ui/button";
@@ -32,15 +32,16 @@ const getSystemNavigation = (t: any) => [
 
 export default function AdminSidebar() {
   const { t } = useTranslation();
-  const { user, logoutMutation } = useAuth();
+  const { user } = useAuth();
   const [location, navigate] = useLocation();
+
+  const handleLogout = () => {
+    // Redirect to Replit Auth logout
+    window.location.assign("/api/logout");
+  };
   
   const navigation = getNavigation(t);
   const systemNavigation = getSystemNavigation(t);
-
-  const handleLogout = () => {
-    logoutMutation.mutate();
-  };
 
   return (
     <div className="fixed inset-y-0 left-0 z-50 w-72 bg-card border-r border-border">
@@ -123,7 +124,6 @@ export default function AdminSidebar() {
             variant="ghost"
             size="sm"
             onClick={handleLogout}
-            disabled={logoutMutation.isPending}
             data-testid="button-logout"
           >
             <LogOut className="w-4 h-4" />

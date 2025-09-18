@@ -1,4 +1,4 @@
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 import CustomerSidebar from "@/components/customer-sidebar";
 import type { UsageSummaryResponse, BotsResponse, UsageEventsResponse } from "@shared/api-types";
