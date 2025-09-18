@@ -130,6 +130,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Bootstrap endpoint - makes the current user platform_admin if no admin exists
+  app.post('/api/admin/bootstrap', isAuthenticated, async (req: any, res) => {
+    try {
+      const userEmail = req.user.claims?.email;
+      if (!userEmail) {
+        return res.status(401).json({ message: "Invalid user claims" });
+      }
+
+      // Get the current user
+      const currentUser = await storage.getUserByEmail(userEmail);
+      if (!currentUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Check if user is already platform_admin
+      if (currentUser.role === 'platform_admin') {
+        return res.status(200).json({ 
+          message: "User is already platform_admin",
+          user: {
+            id: currentUser.id,
+            email: currentUser.email,
+            role: currentUser.role
+          }
+        });
+      }
+
+      // Check if any platform_admin exists
+      const allUsers = await storage.getAllUsers();
+      const existingAdmins = allUsers.filter(u => u.role === 'platform_admin');
+
+      if (existingAdmins.length > 0) {
+        return res.status(403).json({ 
+          message: "Platform admin already exists. Bootstrap not allowed.",
+          existingAdmins: existingAdmins.length
+        });
+      }
+
+      // No admins exist - make this user platform_admin
+      const updatedUser = await storage.updateUser(currentUser.id, { 
+        role: 'platform_admin' 
+      });
+
+      console.log(`[BOOTSTRAP] User ${userEmail} promoted to platform_admin (first admin)`);
+
+      // Create audit log
+      await storage.createAuditLog({
+        userId: currentUser.id,
+        tenantId: currentUser.tenantId || undefined,
+        eventType: 'role_change',
+        description: `User bootstrapped as first platform_admin`,
+        metadata: {
+          previousRole: currentUser.role,
+          newRole: 'platform_admin',
+          reason: 'bootstrap'
+        },
+        ipAddress: req.ip || 'unknown',
+        userAgent: req.get('user-agent') || 'unknown'
+      });
+
+      res.json({
+        success: true,
+        message: "Successfully bootstrapped as platform_admin",
+        user: {
+          id: updatedUser.id,
+          email: updatedUser.email,
+          role: updatedUser.role
+        }
+      });
+    } catch (error) {
+      console.error('[BOOTSTRAP] Error:', error);
+      res.status(500).json({ 
+        message: "Failed to bootstrap admin",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   // Apply enterprise hardening security controls
   const { 
     enforceHTTPS, 
