@@ -324,7 +324,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, id))
       .returning();
     if (!user) {
-      throw createError(404, 'User not found');
+      throw createError.database('User not found');
     }
     return user;
   }
@@ -364,7 +364,7 @@ export class DatabaseStorage implements IStorage {
   async deleteUser(id: string): Promise<void> {
     const user = await this.getUser(id);
     if (!user) {
-      throw createError(404, 'User not found');
+      throw createError.database('User not found');
     }
     
     await db.delete(users).where(eq(users.id, id));
