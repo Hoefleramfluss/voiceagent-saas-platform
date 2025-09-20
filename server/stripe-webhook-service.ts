@@ -14,7 +14,7 @@ export class StripeWebhookService {
       const stripeKey = await getStripeKey();
       if (stripeKey) {
         this.stripe = new Stripe(stripeKey, {
-          apiVersion: "2025-08-27.basil",
+          apiVersion: "2023-10-16" as any,
         });
         return this.stripe;
       }
@@ -62,6 +62,9 @@ export class StripeWebhookService {
     console.log(`[Stripe Webhook] Processing event: ${event.type}`);
 
     switch (event.type) {
+      case 'checkout.session.completed':
+        await this.handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+        break;
       // Invoice lifecycle events
       case 'invoice.created':
         await this.handleInvoiceCreated(event.data.object as Stripe.Invoice);
@@ -422,6 +425,29 @@ export class StripeWebhookService {
     if (paymentMethod.customer) {
       const customerId = typeof paymentMethod.customer === 'string' ? paymentMethod.customer : paymentMethod.customer.id;
       console.log(`[Webhook] Customer ${customerId} updated payment method ${paymentMethod.type}`);
+    }
+  }
+
+  private async handleCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
+    try {
+      const tenantId = session?.metadata?.tenant_id;
+      const subscriptionId = typeof session?.subscription === 'string' ? session.subscription : undefined;
+
+    if (tenantId && subscriptionId) {
+      const planId = session?.metadata?.plan_id;
+      if (!planId) {
+        console.warn('[Webhook] Checkout session missing plan metadata for tenant', tenantId);
+        return;
+      }
+
+      await storage.updateTenantSubscription(tenantId, {
+        planId,
+        subscriptionStatus: 'active',
+        startDate: new Date(),
+      });
+    }
+    } catch (error) {
+      console.error('[Webhook] checkout.session.completed failed:', error);
     }
   }
 

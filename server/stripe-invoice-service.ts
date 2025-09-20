@@ -137,27 +137,54 @@ export class StripeInvoiceService {
           index.toString()
         );
         
-        const invoiceItem = await stripe.invoiceItems.create({
-          customer: billingAccount.stripeCustomerId,
-          amount: lineItem.totalAmountCents, // Already in cents
-          currency: billingCalculation.currency.toLowerCase(),
-          description: `${lineItem.name}: ${lineItem.quantity.toLocaleString()} units × €${(lineItem.ratePerUnitCents / 100).toFixed(4)}`,
-          metadata: {
-            tenant_id: tenantId,
-            usage_kind: lineItem.kind,
-            quantity: lineItem.quantity.toString(),
-            rate_per_unit_cents: lineItem.ratePerUnitCents.toString(),
-            period_start: periodStart.toISOString(),
-            period_end: periodEnd.toISOString()
-          }
-        }, {
-          idempotencyKey: itemIdempotencyKey
-        });
-        invoiceItems.push(invoiceItem);
+      const invoiceItem = await stripe.invoiceItems.create({
+        customer: billingAccount.stripeCustomerId,
+        amount: lineItem.totalAmountCents, // Already in cents
+        currency: billingCalculation.currency.toLowerCase(),
+        description: `${lineItem.name}: ${lineItem.quantity.toLocaleString()} units × €${(lineItem.ratePerUnitCents / 100).toFixed(4)}`,
+        metadata: {
+          tenant_id: tenantId,
+          usage_kind: lineItem.kind,
+          quantity: lineItem.quantity.toString(),
+          rate_per_unit_cents: lineItem.ratePerUnitCents.toString(),
+          period_start: periodStart.toISOString(),
+          period_end: periodEnd.toISOString()
+        }
+      }, {
+        idempotencyKey: itemIdempotencyKey
+      });
+      invoiceItems.push(invoiceItem);
+    }
+
+      const adjustments = await storage.getBillingAdjustments(tenantId, { from: periodStart, to: periodEnd });
+      const totalBefore = billingCalculation.lineItems.reduce((sum, item) => sum + item.totalAmountCents, 0);
+      let discountCents = 0;
+      for (const adjustment of adjustments) {
+        if (adjustment.type === 'discount_percent' && adjustment.valuePercent) {
+          discountCents += Math.round(totalBefore * (adjustment.valuePercent / 100));
+        } else if (adjustment.type === 'discount_fixed_cents' && adjustment.valueCents) {
+          discountCents += adjustment.valueCents;
+        }
       }
 
-      // Create the invoice with idempotency key
-      const invoice = await stripe.invoices.create({
+      if (discountCents > 0) {
+        const discountKey = this.generateIdempotencyKey(
+          'invoice_item_discount',
+          tenantId,
+          periodStart.toISOString(),
+          periodEnd.toISOString()
+        );
+        const discountItem = await stripe.invoiceItems.create({
+          customer: billingAccount.stripeCustomerId,
+          currency: billingCalculation.currency.toLowerCase(),
+          amount: -1 * discountCents,
+          description: `Rabatt für ${periodStart.toISOString().slice(0, 7)}`
+        }, { idempotencyKey: discountKey });
+        invoiceItems.push(discountItem);
+      }
+
+    // Create the invoice with idempotency key
+    const invoice = await stripe.invoices.create({
         customer: billingAccount.stripeCustomerId,
         description: `Voice Agent Usage - ${periodStart.toLocaleDateString()} to ${periodEnd.toLocaleDateString()}`,
         metadata: {

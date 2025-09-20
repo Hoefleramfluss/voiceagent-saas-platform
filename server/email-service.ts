@@ -288,9 +288,9 @@ VoiceAgent Support Team
       if (!this.isConfigured && !this.sgMail) {
         await this.initialize();
       }
-      
+
       const template = this.generateWelcomeEmailTemplate(data);
-      
+
       if (!this.isConfigured || !this.sgMail) {
         // Secure fallback logging - never expose sensitive data
         logSafely('info', template, 'Welcome email queued (SendGrid not configured)');
@@ -318,6 +318,74 @@ VoiceAgent Support Team
       
       // Always return success for welcome emails to prevent blocking user creation
       return { success: true, error: errorMessage };
+    }
+  }
+
+  private generateCheckoutEmailTemplate(data: { to: string; tenantName: string; planName: string; checkoutUrl: string }) {
+    const subject = `Bitte Zahlungsdaten hinterlegen & Paket bestätigen (${data.planName})`;
+    const text = `Hallo ${data.tenantName},
+
+bitte hinterlegen Sie Ihre Zahlungsdaten und bestätigen Sie Ihr Paket (${data.planName}):
+${data.checkoutUrl}
+
+Vielen Dank!`;
+    const html = `<!doctype html><html><body style="font-family:Arial,sans-serif">
+      <div style="max-width:600px;margin:0 auto;padding:20px">
+        <h2>Willkommen, ${data.tenantName}!</h2>
+        <p>Bitte bestätigen Sie Ihr Paket <b>${data.planName}</b> und hinterlegen Sie Ihre Zahlungsdaten.</p>
+        <p><a href="${data.checkoutUrl}" style="display:inline-block;padding:12px 16px;background:#111;color:#fff;border-radius:8px;text-decoration:none">Stripe Checkout öffnen</a></p>
+        <p>Fallback-Link: <a href="${data.checkoutUrl}">${data.checkoutUrl}</a></p>
+      </div></body></html>`;
+    return { to: data.to, subject, text, html };
+  }
+
+  async sendCheckoutEmail(data: { to: string; tenantName: string; planName: string; checkoutUrl: string; tenantId?: string }): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!this.isConfigured && !this.sgMail) {
+        await this.initialize();
+      }
+
+      let template = this.generateCheckoutEmailTemplate(data);
+
+      try {
+        if (data.tenantId) {
+          const tenantTemplates = await storage.getEmailTemplates(data.tenantId);
+          const onboarding = tenantTemplates?.onboarding || {};
+          const apply = (value?: string) => (value || '')
+            .replaceAll('{TENANT_NAME}', data.tenantName)
+            .replaceAll('{CHECKOUT_URL}', data.checkoutUrl)
+            .replaceAll('{PLAN_NAME}', data.planName);
+
+          template = {
+            to: template.to,
+            subject: onboarding.subject ? apply(onboarding.subject) : template.subject,
+            text: onboarding.text ? apply(onboarding.text) : template.text,
+            html: onboarding.html ? apply(onboarding.html) : template.html
+          };
+        }
+      } catch (error) {
+        console.warn('[EMAIL] Failed to apply tenant email templates:', error);
+      }
+
+      if (!this.isConfigured || !this.sgMail) {
+        logSafely('info', template, 'Checkout email queued (SendGrid not configured)');
+        return { success: true };
+      }
+
+      await this.sgMail.send({
+        to: template.to,
+        from: process.env.SENDGRID_FROM_EMAIL || 'billing@voiceagent.com',
+        subject: template.subject,
+        text: template.text,
+        html: template.html
+      });
+
+      logSafely('info', template, 'Checkout email sent successfully');
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[EMAIL] Failed to send checkout email:', errorMessage);
+      return { success: false, error: errorMessage };
     }
   }
 

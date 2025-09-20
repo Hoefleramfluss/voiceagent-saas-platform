@@ -120,14 +120,14 @@ export default function AdminSidebar() {
           })}
         </div>
         
-        <div className="pt-4 border-t border-border">
+        <div className="pt-4 border-t border-border space-y-1">
           <p className="px-3 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
             System
           </p>
           {systemNavigation.map((item) => {
             const Icon = item.icon;
             const isActive = location === item.href;
-            
+
             return (
               <Button
                 key={item.name}
@@ -141,10 +141,11 @@ export default function AdminSidebar() {
               </Button>
             );
           })}
+          <a href="/admin/settings" className="block px-4 py-2 hover:bg-accent rounded-lg">Einstellungen</a>
+          <a href="/admin/adjustments" className="block px-4 py-2 hover:bg-accent rounded-lg">Rabatte & Freiminuten</a>
+          <a href="/admin/retell-editor" className="block px-4 py-2 hover:bg-accent rounded-lg">Retell Editor</a>
         </div>
-        <a href="/admin/adjustments" className="block px-4 py-2 hover:bg-accent rounded-lg">Rabatte & Freiminuten</a>
-  <a href="/admin/retell-editor" className="block px-4 py-2 hover:bg-accent rounded-lg">Retell Editor</a>
-</nav>
+      </nav>
       {/* User Profile */}
       <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-border">
         <div className="flex items-center gap-3">

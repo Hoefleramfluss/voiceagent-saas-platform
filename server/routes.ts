@@ -9,6 +9,7 @@ import { FeatureFlagKey } from "@shared/feature-flags";
 import { z } from "zod";
 import { encryptApiKey, decryptApiKey, maskApiKey } from "./crypto";
 import { keyLoader, getStripeKey, getStripeWebhookSecret, invalidateKeyCache } from "./key-loader";
+import { retellApi } from "./retell-api";
 import { billingCalculator } from "./billing-calculator";
 import { enhancedBillingCalculator } from "./enhanced-billing-calculator";
 import { stripeInvoiceService } from "./stripe-invoice-service";
@@ -757,10 +758,224 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('[Customer API] Apply usage error:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error" 
+        error: error instanceof Error ? error.message : "Unknown error"
       });
+    }
+  });
+
+  app.post("/api/customers/:id/stripe/checkout", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { planId, successUrl, cancelUrl } = req.body as { planId: string; successUrl?: string; cancelUrl?: string };
+
+      if (!planId) {
+        return res.status(400).json({ message: "planId required" });
+      }
+
+      const tenant = await storage.getTenant(id);
+      if (!tenant) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+
+      const plan = await storage.getSubscriptionPlan(planId);
+      if (!plan || plan.status !== 'active') {
+        return res.status(404).json({ message: "Subscription plan not found or inactive" });
+      }
+
+      if (!plan.stripePriceId) {
+        return res.status(400).json({ message: "stripePriceId missing (monthly price)" });
+      }
+
+      const stripeKey = await getStripeKey();
+      if (!stripeKey) {
+        return res.status(500).json({ message: "Stripe not configured" });
+      }
+
+      const StripeLib = (await import('stripe')).default;
+      const stripe = new StripeLib(stripeKey, { apiVersion: '2023-10-16' });
+
+      let stripeCustomerId = tenant.stripeCustomerId;
+      if (!stripeCustomerId) {
+        const customer = await stripe.customers.create({
+          name: tenant.name,
+          email: tenant.email,
+          metadata: { tenant_id: tenant.id }
+        });
+        stripeCustomerId = customer.id;
+        await storage.updateTenant(tenant.id, { stripeCustomerId });
+      }
+
+      const baseUrl = process.env.FRONTEND_URL || 'https://voiceagent-worktask.replit.app';
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        customer: stripeCustomerId,
+        line_items: [{ price: plan.stripePriceId, quantity: 1 }],
+        success_url: successUrl || `${baseUrl}/admin/customers?checkout=success`,
+        cancel_url: cancelUrl || `${baseUrl}/admin/customers?checkout=cancel`,
+        allow_promotion_codes: false,
+        subscription_data: {
+          metadata: {
+            tenant_id: tenant.id,
+            plan_id: plan.id,
+            min_term_months: '12'
+          }
+        }
+      }, { idempotencyKey: `${tenant.id}:${plan.id}:checkout` });
+
+      await storage.updateTenantSubscription(tenant.id, {
+        planId: plan.id,
+        subscriptionStatus: 'pending',
+        startDate: new Date()
+      });
+
+      const { EmailService } = await import('./email-service');
+      const emailServiceInstance = new EmailService();
+      await emailServiceInstance.sendCheckoutEmail({
+        to: tenant.email,
+        tenantName: tenant.name,
+        planName: plan.name,
+        checkoutUrl: session.url!,
+        tenantId: tenant.id
+      });
+
+      res.json({ url: session.url });
+    } catch (error) {
+      console.error('[Stripe] Checkout error:', (error as Error).message || error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.post("/api/admin/billing/run-monthly", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { tenantId, month, year } = req.body as { tenantId: string; month?: number; year?: number };
+      if (!tenantId) {
+        return res.status(400).json({ message: "tenantId required" });
+      }
+
+      const now = new Date();
+      const billingMonth = month ?? now.getMonth();
+      const billingYear = year ?? now.getFullYear();
+      const periodStart = new Date(billingYear, billingMonth, 1);
+      const periodEnd = new Date(billingYear, billingMonth + 1, 0, 23, 59, 59);
+
+      const twilio = await import('./twilio-service');
+      await twilio.importForwardingForTenantPeriod(tenantId, periodStart, periodEnd);
+
+      const invoice = await stripeInvoiceService.generateMonthlyInvoice(tenantId, periodStart, periodEnd);
+      res.json(invoice);
+    } catch (error) {
+      console.error('[Billing] Manual monthly run failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.post("/api/admin/billing/adjustments", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { tenantId, type, valuePercent, valueCents, valueMinutes, minuteScope, effectiveFrom, effectiveTo, appliesToPeriod } = req.body;
+      if (!tenantId || !type) {
+        return res.status(400).json({ message: "tenantId and type required" });
+      }
+
+      const adjustment = await storage.createBillingAdjustment({
+        tenantId,
+        type,
+        valuePercent,
+        valueCents,
+        valueMinutes,
+        minuteScope,
+        effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : undefined,
+        effectiveTo: effectiveTo ? new Date(effectiveTo) : undefined,
+        appliesToPeriod
+      });
+
+      res.json(adjustment);
+    } catch (error) {
+      console.error('[Billing] Create adjustment failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.get("/api/admin/billing/adjustments/:tenantId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const adjustments = await storage.getBillingAdjustments(req.params.tenantId);
+      res.json(adjustments);
+    } catch (error) {
+      console.error('[Billing] Fetch adjustments failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.delete("/api/admin/billing/adjustments/:tenantId/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      await storage.deleteBillingAdjustment(req.params.id, req.params.tenantId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[Billing] Delete adjustment failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.get("/api/admin/email-templates/:tenantId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const templates = await storage.getEmailTemplates(req.params.tenantId);
+      res.json(templates);
+    } catch (error) {
+      console.error('[Settings] Get email templates failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.put("/api/admin/email-templates/:tenantId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      await storage.updateEmailTemplates(req.params.tenantId, req.body);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[Settings] Update email templates failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
+    }
+  });
+
+  app.post("/api/twilio/usage/import", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { tenantId, numberSid, periodStart, periodEnd, botId } = req.body as { tenantId: string; numberSid: string; periodStart: string; periodEnd: string; botId?: string };
+      if (!tenantId || !numberSid || !periodStart || !periodEnd) {
+        return res.status(400).json({ message: "tenantId, numberSid, periodStart, periodEnd required" });
+      }
+
+      const twilio = await import('./twilio-service');
+      const result = await twilio.fetchForwardingMinutes({
+        numberSid,
+        periodStart: new Date(periodStart),
+        periodEnd: new Date(periodEnd)
+      });
+
+      const minutes = Math.round((result.totalSeconds / 60) * 100) / 100;
+      const bots = await storage.getBots(tenantId);
+      const selectedBotId = botId || bots[0]?.id;
+
+      if (!selectedBotId) {
+        return res.status(400).json({ message: "No bot found for tenant; provide botId" });
+      }
+
+      await storage.createUsageEvent({
+        tenantId,
+        botId: selectedBotId,
+        kind: 'forwarding_minute' as any,
+        quantity: minutes.toString(),
+        metadata: { numberSid, source: 'twilio_import' },
+        timestamp: new Date()
+      });
+
+      res.json({
+        importedSeconds: result.totalSeconds,
+        importedMinutes: minutes,
+        callCount: result.calls.length
+      });
+    } catch (error) {
+      console.error('[Twilio] Import usage error:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
     }
   });
 
@@ -800,36 +1015,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/retell/agents - List agents for mirror dashboard
   app.get("/api/retell/agents", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
-      const { tenantId } = req.query;
-      
-      // Get bots with retell agent IDs
-      const bots = tenantId 
-        ? await storage.getBots(tenantId as string)
-        : []; // No getAllBots method available, return empty array for now
-      
-      const agents = bots
-        .filter(bot => bot.retellAgentId)
-        .map(bot => ({
-          botId: bot.id,
-          retellAgentId: bot.retellAgentId,
-          name: bot.name,
-          status: bot.status,
-          tenantId: bot.tenantId,
-          locale: bot.locale,
-          systemPrompt: bot.systemPrompt?.substring(0, 100) + "...", // Preview only
-          lastUpdated: bot.updatedAt
-        }));
-      
-      res.json({
-        success: true,
-        agents,
-        total: agents.length
-      });
+      const agents = await retellApi.listAgents();
+      res.json(agents);
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error"
-      });
+      console.error('[Retell] Failed to list agents:', error);
+      res.status(500).json({ message: (error as Error).message || 'Failed to list Retell agents' });
     }
   });
 
@@ -2648,6 +2838,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  app.post("/api/tenants/:id/assign-number", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const tenantId = req.params.id;
+      const { numberSid, phoneNumber, botId } = req.body as { numberSid: string; phoneNumber: string; botId?: string };
+
+      if (!numberSid || !phoneNumber) {
+        return res.status(400).json({ message: "numberSid and phoneNumber are required" });
+      }
+
+      const bots = await storage.getBots(tenantId);
+      if (bots.length === 0) {
+        return res.status(400).json({ message: "No bots available for tenant" });
+      }
+
+      const targetBotId = botId || bots[0].id;
+      const { twilioService } = await import('./twilio-service');
+
+      const result = await twilioService.assignExistingNumber({
+        numberSid,
+        phoneNumber,
+        tenantId,
+        botId: targetBotId
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ message: result.error || 'Failed to assign phone number' });
+      }
+
+      res.json({ success: true, botId: targetBotId });
+    } catch (error) {
+      console.error('[Twilio] Assign number failed:', error);
+      res.status(500).json({ message: (error as Error).message || 'Unknown error' });
     }
   });
 

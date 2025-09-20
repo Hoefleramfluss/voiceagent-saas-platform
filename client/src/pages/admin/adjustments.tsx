@@ -15,20 +15,27 @@ export default function Adjustments() {
   const [scope, setScope] = useState('both');
   const [appliesToPeriod, setAppliesToPeriod] = useState(''); // YYYY-MM
 
-  const load = ()=> apiRequest(`/api/admin/billing/adjustments/${user?.tenantId}`).then(r=>r.json()).then(setAdjs);
+  const load = () =>
+    apiRequest('GET', `/api/admin/billing/adjustments/${user?.tenantId}`)
+      .then((res) => res.json())
+      .then(setAdjs);
   useEffect(()=>{ if(user?.tenantId) load(); }, [user]);
 
   const add = async () => {
     const body:any = { tenantId: user?.tenantId, type };
-    if (type === 'discount_percent') body.valuePercent = parseInt(value||'0',10);
-    if (type === 'discount_fixed_cents') body.valueCents = parseInt(value||'0',10);
-    if (type === 'extra_free_minutes') { body.valueMinutes = parseInt(value||'0',10); body.minuteScope = scope; body.appliesToPeriod = appliesToPeriod || undefined; }
-    await apiRequest('/api/admin/billing/adjustments', { method: 'POST', body: JSON.stringify(body) });
+    if (type === 'discount_percent') body.valuePercent = parseInt(value || '0', 10);
+    if (type === 'discount_fixed_cents') body.valueCents = parseInt(value || '0', 10);
+    if (type === 'extra_free_minutes') {
+      body.valueMinutes = parseInt(value || '0', 10);
+      body.minuteScope = scope;
+      body.appliesToPeriod = appliesToPeriod || undefined;
+    }
+    await apiRequest('POST', '/api/admin/billing/adjustments', body);
     setValue(''); setAppliesToPeriod(''); load();
   };
 
   const del = async (id:string) => {
-    await apiRequest(`/api/admin/billing/adjustments/${user?.tenantId}/${id}`, { method: 'DELETE' });
+    await apiRequest('DELETE', `/api/admin/billing/adjustments/${user?.tenantId}/${id}`);
     load();
   };
 

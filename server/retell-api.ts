@@ -5,7 +5,6 @@ import { getRetellKey } from "./key-loader";
  */
 
 import type { ApiKey } from '@shared/schema';
-import { keyLoader } from './key-loader';
 
 export interface RetellAgent {
   agent_id: string;
@@ -60,7 +59,7 @@ export class RetellAPIService {
   private baseUrl = 'https://api.retellai.com';
   
   private async getApiKey(): Promise<string> {
-    const secretKey = await keyLoader.getRetellSecretKey();
+    const secretKey = await getRetellKey();
     if (!secretKey) {
       throw new RetellAPIError('Retell API secret key not configured');
     }
@@ -140,8 +139,30 @@ export class RetellAPIService {
    * List all agents
    */
   async listAgents(): Promise<RetellAgent[]> {
-    const response = await this.makeRequest<{ agents: RetellAgent[] }>('/list-agents');
-    return response.agents || [];
+    const key = await getRetellKey();
+    if (!key) {
+      throw new RetellAPIError('Retell API key not configured');
+    }
+
+    const resp = await fetch('https://api.retellai.com/v1/agents', {
+      headers: { Authorization: `Bearer ${key}` }
+    } as any);
+
+    if (!resp.ok) {
+      throw new RetellAPIError(`Retell list agents failed: ${resp.status}`, resp.status);
+    }
+
+    const payload = await resp.json();
+    if (Array.isArray(payload)) {
+      return payload as RetellAgent[];
+    }
+    if (Array.isArray(payload?.data)) {
+      return payload.data;
+    }
+    if (Array.isArray(payload?.agents)) {
+      return payload.agents;
+    }
+    return [];
   }
 
   /**
@@ -190,3 +211,19 @@ export class RetellAPIService {
 }
 
 export const retellAPI = new RetellAPIService();
+
+export const retellApi = Object.assign({}, retellAPI, {
+  async listAgents() {
+    const key = await getRetellKey();
+    if (!key) {
+      throw new Error('RETELL_API_KEY missing');
+    }
+    const resp = await fetch('https://api.retellai.com/v1/agents', {
+      headers: { Authorization: `Bearer ${key}` }
+    } as any);
+    if (!resp.ok) {
+      throw new Error(`Retell list agents failed: ${resp.status}`);
+    }
+    return resp.json();
+  }
+});
