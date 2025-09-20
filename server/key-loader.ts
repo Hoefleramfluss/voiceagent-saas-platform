@@ -303,9 +303,15 @@ export async function getHerokuKey(): Promise<string | null> {
 
 export function invalidateKeyCache(serviceType?: string, keyName?: string): void {
   keyLoader.invalidateCache(serviceType, keyName);
-}export async function getRetellKey(): Promise<string | null> {
+}
+
+export async function getRetellKey(): Promise<string | null> {
   const dbKey = await keyLoader.getApiKey('retell');
-  if (dbKey) return dbKey;
-  if (process.env.RETELL_API_KEY) return process.env.RETELL_API_KEY;
+  if (dbKey) {
+    return dbKey;
+  }
+  if (process.env.RETELL_API_KEY) {
+    return process.env.RETELL_API_KEY;
+  }
   return null;
 }

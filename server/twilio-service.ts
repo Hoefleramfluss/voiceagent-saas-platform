@@ -225,9 +225,26 @@ class TwilioService {
         twilioNumber: options.phoneNumber,
         status: 'ready'
       });
-      
+
+      const existingMapping = await storage.getPhoneNumberMappingByPhone(options.phoneNumber);
+      if (existingMapping) {
+        await storage.updatePhoneNumberMapping(existingMapping.id, options.tenantId, {
+          botId: options.botId,
+          numberSid: options.numberSid,
+          isActive: true,
+        });
+      } else {
+        await storage.createPhoneNumberMapping({
+          tenantId: options.tenantId,
+          botId: options.botId,
+          phoneNumber: options.phoneNumber,
+          numberSid: options.numberSid,
+          webhookUrl: `${webhookBaseUrl}/api/twilio/voice/${options.botId}`,
+        });
+      }
+
       console.log(`[Twilio] Successfully assigned number ${options.phoneNumber} to bot ${options.botId}`);
-      
+
       return { success: true };
       
     } catch (error) {
@@ -270,14 +287,16 @@ export async function importForwardingForTenantPeriod(tenantId: string, periodSt
   const mappings = await storage.getPhoneNumberMappings(tenantId);
   let totalSec = 0;
   for (const m of mappings) {
-    if (!m.numberSid) continue;
-    const res = await fetchForwardingMinutes({ numberSid: m.numberSid, periodStart, periodEnd });
+    const numberSid = (m as any).numberSid as string | undefined;
+    if (!numberSid) continue;
+    const res = await fetchForwardingMinutes({ numberSid, periodStart, periodEnd });
     totalSec += res.totalSeconds;
   }
   const periodKey = periodStart.toISOString().slice(0,7);
   const events = await storage.getUsageEvents(tenantId, { periodStart, periodEnd });
   for (const ev of events) {
-    if (ev.kind === 'forwarding_minute' && ev.metadata?.source === 'twilio_import' && ev.metadata?.period === periodKey) {
+    const metadata = (ev.metadata ?? {}) as Record<string, any>;
+    if (ev.kind === 'forwarding_minute' && metadata.source === 'twilio_import' && metadata.period === periodKey) {
       await storage.deleteUsageEvent(ev.id);
     }
   }
@@ -286,8 +305,11 @@ export async function importForwardingForTenantPeriod(tenantId: string, periodSt
   const botId = bots[0]?.id;
   if (minutes > 0 && botId) {
     await storage.createUsageEvent({
-      tenantId, botId, kind: 'forwarding_minute' as any, quantity: minutes as any,
-      metadata: { source: 'twilio_import', period: periodKey }, timestamp: new Date()
+      tenantId,
+      botId,
+      kind: 'forwarding_minute' as any,
+      quantity: minutes.toString() as any,
+      metadata: { source: 'twilio_import', period: periodKey },
     });
   }
   return { minutes };

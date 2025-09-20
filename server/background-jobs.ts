@@ -1,4 +1,5 @@
 import { storage } from './storage';
+import { stripeInvoiceService } from './stripe-invoice-service';
 import { CronJob } from 'cron';
 
 /**
@@ -375,6 +376,38 @@ export async function archiveOldAuditLogs(): Promise<void> {
   }
 }
 
+async function runMonthlyBillingJob(): Promise<void> {
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const isMonthEnd = now.getMonth() !== tomorrow.getMonth();
+
+  if (!isMonthEnd) {
+    console.log('[Monthly Billing] Skipped - not last day of month');
+    return;
+  }
+
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+  const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+  const tenants = await storage.getTenants();
+
+  console.log('[Monthly Billing] Starting for', tenants.length, 'tenants', 'period', periodStart.toISOString(), '-', periodEnd.toISOString());
+
+  for (const tenant of tenants) {
+    try {
+      const twilio = await import('./twilio-service');
+      await twilio.importForwardingForTenantPeriod(tenant.id, periodStart, periodEnd);
+    } catch (error) {
+      console.error('[Monthly Billing] Twilio import failed for tenant', tenant.id, error);
+    }
+
+    try {
+      await stripeInvoiceService.generateMonthlyInvoice(tenant.id, periodStart, periodEnd);
+    } catch (error) {
+      console.error('[Monthly Billing] Invoice generation failed for tenant', tenant.id, error);
+    }
+  }
+}
+
 /**
  * Initialize all background jobs with their schedules
  */
@@ -427,11 +460,22 @@ export function initializeBackgroundJobs(): void {
     'archive-audit-logs',
     '0 1 * * 0', // Weekly on Sunday at 1 AM
     archiveOldAuditLogs,
-    { 
-      description: 'Archive old audit logs for performance' 
+    {
+      description: 'Archive old audit logs for performance'
     }
   );
-  
+
+  // Monthly billing run - daily at 23:55 Europe/Vienna, only executes on month end
+  backgroundJobManagerInstance.registerJob(
+    'monthly-billing',
+    '0 55 23 * * *',
+    runMonthlyBillingJob,
+    {
+      timezone: 'Europe/Vienna',
+      description: 'Import Twilio forwarding minutes & generate Stripe invoices at month end'
+    }
+  );
+
   // Start all jobs
   backgroundJobManagerInstance.startAllJobs();
   

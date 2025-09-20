@@ -19,7 +19,28 @@ import { Plus, Bot, Activity, AlertCircle, CheckCircle, Clock, Zap, Edit } from 
 interface CreateBotData {
   tenantId: string;
   retellAgentId: string;
+  name: string;
+  locale: string;
+  sttProvider: string;
+  ttsProvider: string;
+  greetingMessage: string;
+  systemPrompt: string;
 }
+
+const DEFAULT_RETELL_PROMPT =
+  "This bot is managed entirely through Retell AI. All configuration should be handled in the Retell dashboard.";
+const DEFAULT_RETELL_GREETING = "Voice agent managed via Retell AI";
+
+const DEFAULT_NEW_BOT: CreateBotData = {
+  tenantId: "",
+  retellAgentId: "",
+  name: "Retell VoiceBot",
+  locale: "de-AT",
+  sttProvider: "google",
+  ttsProvider: "elevenlabs",
+  greetingMessage: DEFAULT_RETELL_GREETING,
+  systemPrompt: DEFAULT_RETELL_PROMPT,
+};
 
 interface RetellAgentDetails {
   agent_id: string;
@@ -47,10 +68,7 @@ function AdminBotsContent() {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingBot, setEditingBot] = useState<any>(null);
   const [selectedTenant, setSelectedTenant] = useState<string>("");
-  const [newBot, setNewBot] = useState<CreateBotData>({
-    tenantId: "",
-    retellAgentId: ""
-  });
+  const [newBot, setNewBot] = useState<CreateBotData>(DEFAULT_NEW_BOT);
   
   const [agentDetails, setAgentDetails] = useState<RetellAgentDetails | null>(null);
   const [loadingAgent, setLoadingAgent] = useState(false);
@@ -96,6 +114,16 @@ function AdminBotsContent() {
     return () => clearTimeout(timer);
   }, [newBot.retellAgentId]);
 
+  useEffect(() => {
+    if (agentDetails) {
+      setNewBot((prev) => ({
+        ...prev,
+        name: agentDetails.agent_name || prev.name,
+        locale: agentDetails.language || prev.locale,
+      }));
+    }
+  }, [agentDetails]);
+
   const { data: tenants } = useQuery<TenantsResponse>({
     queryKey: ["/api/tenants"],
   });
@@ -125,15 +153,9 @@ function AdminBotsContent() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/bots", selectedTenant] });
       setIsCreateOpen(false);
-      setNewBot({
-        name: "",
-        tenantId: "",
-        locale: "en-US",
-        sttProvider: "google",
-        ttsProvider: "elevenlabs",
-        greetingMessage: "Hello! How can I help you today?",
-        systemPrompt: "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
-      });
+      setNewBot(DEFAULT_NEW_BOT);
+      setAgentDetails(null);
+      setAgentError(null);
       toast({
         title: "VoiceBot created",
         description: "New VoiceBot provisioning has been started.",
@@ -191,24 +213,25 @@ function AdminBotsContent() {
     }
     
     // Create bot with Retell agent details
-    const botData = {
+    const botData: CreateBotData = {
       tenantId: newBot.tenantId,
       retellAgentId: newBot.retellAgentId,
-      name: agentDetails?.agent_name || `Retell Agent ${newBot.retellAgentId}`,
-      locale: agentDetails?.language || 'en-US',
-      sttProvider: 'retell', // Use Retell for everything
-      ttsProvider: 'retell', // Use Retell for everything  
-      greetingMessage: 'Connected via Retell AI',
-      systemPrompt: 'This bot is managed entirely through Retell AI. All configuration should be done in the Retell dashboard.'
+      name: agentDetails?.agent_name || newBot.name || `Retell Agent ${newBot.retellAgentId}`,
+      locale: agentDetails?.language || newBot.locale,
+      sttProvider: newBot.sttProvider,
+      ttsProvider: newBot.ttsProvider,
+      greetingMessage: newBot.greetingMessage,
+      systemPrompt: newBot.systemPrompt,
     };
-    
+
     createBotMutation.mutate(botData);
   };
 
   const handleEditBot = (bot: any) => {
     setEditingBot({
       ...bot,
-      systemPrompt: bot.systemPrompt || "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
+      greetingMessage: bot.greetingMessage || DEFAULT_RETELL_GREETING,
+      systemPrompt: bot.systemPrompt || DEFAULT_RETELL_PROMPT
     });
     setIsEditOpen(true);
   };
@@ -424,27 +447,32 @@ function AdminBotsContent() {
                     <Label htmlFor="bot-greeting">Greeting Message</Label>
                     <Textarea
                       id="bot-greeting"
-                      placeholder="Hello! How can I help you today?"
                       value={newBot.greetingMessage}
-                      onChange={(e) => setNewBot({ ...newBot, greetingMessage: e.target.value })}
                       rows={3}
                       data-testid="textarea-greeting"
+                      disabled
+                      readOnly
+                      className="opacity-70"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Greeting is managed in the Retell editor and shown here for reference only.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="bot-system-prompt">System Prompt</Label>
                     <Textarea
                       id="bot-system-prompt"
-                      placeholder="You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries..."
                       value={newBot.systemPrompt}
-                      onChange={(e) => setNewBot({ ...newBot, systemPrompt: e.target.value })}
                       rows={5}
                       data-testid="textarea-system-prompt"
                       required
+                      disabled
+                      readOnly
+                      className="opacity-70"
                     />
-                    <p className="text-sm text-muted-foreground">
-                      Define the AI's personality, behavior, and capabilities. Be specific about how it should respond to users.
+                    <p className="text-xs text-muted-foreground">
+                      Prompt configuration is read-only here. Update prompts directly in Retell.
                     </p>
                   </div>
 
@@ -560,27 +588,32 @@ function AdminBotsContent() {
                       <Label htmlFor="edit-bot-greeting">Greeting Message</Label>
                       <Textarea
                         id="edit-bot-greeting"
-                        placeholder="Hello! How can I help you today?"
                         value={editingBot.greetingMessage}
-                        onChange={(e) => setEditingBot({ ...editingBot, greetingMessage: e.target.value })}
                         rows={3}
                         data-testid="textarea-edit-greeting"
+                        disabled
+                        readOnly
+                        className="opacity-70"
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Manage greeting text directly in Retell.
+                      </p>
                     </div>
 
                     <div className="space-y-2">
                       <Label htmlFor="edit-bot-system-prompt">System Prompt</Label>
                       <Textarea
                         id="edit-bot-system-prompt"
-                        placeholder="You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries..."
                         value={editingBot.systemPrompt}
-                        onChange={(e) => setEditingBot({ ...editingBot, systemPrompt: e.target.value })}
                         rows={5}
                         data-testid="textarea-edit-system-prompt"
                         required
+                        disabled
+                        readOnly
+                        className="opacity-70"
                       />
-                      <p className="text-sm text-muted-foreground">
-                        Define the AI's personality, behavior, and capabilities. Be specific about how it should respond to users.
+                      <p className="text-xs text-muted-foreground">
+                        Prompt editing is locked in the app. Update content within the Retell dashboard.
                       </p>
                     </div>
 

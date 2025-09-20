@@ -12,6 +12,7 @@ import {
   subscriptionPlans,
   invoiceJobs,
   tenantSettings,
+  billingAdjustments,
   flows,
   flowVersions,
   type Tenant,
@@ -105,6 +106,7 @@ export interface IStorage {
     kind?: string;
     botId?: string;
   }): Promise<UsageEvent[]>;
+  deleteUsageEvent(id: string): Promise<void>;
   getUsageSummary(tenantId: string, periodStart: Date, periodEnd: Date): Promise<any>;
 
   // Support operations
@@ -138,6 +140,19 @@ export interface IStorage {
     nextBillingDate?: Date;
   } | undefined>;
   updateBillingAccount(tenantId: string, updates: { stripeSubscriptionId?: string }): Promise<void>;
+  getBillingAdjustments(tenantId: string, period?: { from: Date; to: Date }): Promise<any[]>;
+  createBillingAdjustment(adj: {
+    tenantId: string;
+    type: 'discount_percent' | 'discount_fixed_cents' | 'extra_free_minutes';
+    valuePercent?: number;
+    valueCents?: number;
+    valueMinutes?: number;
+    minuteScope?: 'voice' | 'forwarding' | 'both';
+    effectiveFrom?: Date;
+    effectiveTo?: Date;
+    appliesToPeriod?: string;
+  }): Promise<any>;
+  deleteBillingAdjustment(id: string, tenantId: string): Promise<void>;
 
   // Invoice operations
   getInvoices(tenantId: string): Promise<any[]>;
@@ -196,6 +211,10 @@ export interface IStorage {
     plan: SubscriptionPlan | null;
     billingAccount: any;
   }>;
+
+  // Tenant email templates
+  getEmailTemplates(tenantId: string): Promise<any | null>;
+  updateEmailTemplates(tenantId: string, templates: any): Promise<void>;
 
   // Flow operations
   getFlows(tenantId: string): Promise<Flow[]>;
@@ -431,6 +450,36 @@ export class DatabaseStorage implements IStorage {
     return settings || undefined;
   }
 
+  async getEmailTemplates(tenantId: string): Promise<any | null> {
+    const [settings] = await db
+      .select({ emailTemplates: tenantSettings.emailTemplates })
+      .from(tenantSettings)
+      .where(eq(tenantSettings.tenantId, tenantId));
+    return settings?.emailTemplates ?? null;
+  }
+
+  async updateEmailTemplates(tenantId: string, templates: any): Promise<void> {
+    const now = new Date();
+    const existing = await db
+      .select({ tenantId: tenantSettings.tenantId })
+      .from(tenantSettings)
+      .where(eq(tenantSettings.tenantId, tenantId));
+
+    if (existing.length > 0) {
+      await db
+        .update(tenantSettings)
+        .set({ emailTemplates: templates, updatedAt: now })
+        .where(eq(tenantSettings.tenantId, tenantId));
+    } else {
+      await db.insert(tenantSettings).values({
+        tenantId,
+        emailTemplates: templates,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+  }
+
   async createTenant(insertTenant: InsertTenant): Promise<Tenant> {
     return await withDatabaseRetry(async () => {
       const [tenant] = await db
@@ -548,6 +597,10 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(usageEvents.timestamp))
       .limit(limit)
       .offset(offset);
+  }
+
+  async deleteUsageEvent(id: string): Promise<void> {
+    await db.delete(usageEvents).where(eq(usageEvents.id, id));
   }
 
   async getUsageSummary(tenantId: string, periodStart: Date, periodEnd: Date): Promise<any> {
@@ -699,6 +752,73 @@ export class DatabaseStorage implements IStorage {
     await db.update(billingAccounts)
       .set({ ...updates, updatedAt: new Date() })
       .where(eq(billingAccounts.tenantId, tenantId));
+  }
+
+  async getBillingAdjustments(tenantId: string, period?: { from: Date; to: Date }): Promise<any[]> {
+    const adjustments = await db
+      .select()
+      .from(billingAdjustments)
+      .where(eq(billingAdjustments.tenantId, tenantId))
+      .orderBy(desc(billingAdjustments.createdAt));
+
+    if (!period) {
+      return adjustments;
+    }
+
+    const periodStart = period.from.getTime();
+    const periodEnd = period.to.getTime();
+
+    return adjustments.filter((adjustment) => {
+      const effectiveFrom = adjustment.effectiveFrom ? new Date(adjustment.effectiveFrom).getTime() : Number.NEGATIVE_INFINITY;
+      const effectiveTo = adjustment.effectiveTo ? new Date(adjustment.effectiveTo).getTime() : Number.POSITIVE_INFINITY;
+
+      if (adjustment.appliesToPeriod) {
+        const [yearStr, monthStr] = adjustment.appliesToPeriod.split('-');
+        const year = Number(yearStr);
+        const month = Number(monthStr) - 1;
+        if (!Number.isNaN(year) && !Number.isNaN(month)) {
+          const appliesStart = new Date(year, month, 1).getTime();
+          const appliesEnd = new Date(year, month + 1, 0, 23, 59, 59, 999).getTime();
+          return appliesEnd >= periodStart && appliesStart <= periodEnd;
+        }
+      }
+
+      return effectiveTo >= periodStart && effectiveFrom <= periodEnd;
+    });
+  }
+
+  async createBillingAdjustment(adj: {
+    tenantId: string;
+    type: 'discount_percent' | 'discount_fixed_cents' | 'extra_free_minutes';
+    valuePercent?: number;
+    valueCents?: number;
+    valueMinutes?: number;
+    minuteScope?: 'voice' | 'forwarding' | 'both';
+    effectiveFrom?: Date;
+    effectiveTo?: Date;
+    appliesToPeriod?: string;
+  }): Promise<any> {
+    const [row] = await db
+      .insert(billingAdjustments)
+      .values({
+        tenantId: adj.tenantId,
+        type: adj.type,
+        valuePercent: adj.valuePercent ?? null,
+        valueCents: adj.valueCents ?? null,
+        valueMinutes: adj.valueMinutes ?? null,
+        minuteScope: adj.minuteScope ?? null,
+        effectiveFrom: adj.effectiveFrom ?? null,
+        effectiveTo: adj.effectiveTo ?? null,
+        appliesToPeriod: adj.appliesToPeriod ?? null
+      })
+      .returning();
+    return row;
+  }
+
+  async deleteBillingAdjustment(id: string, tenantId: string): Promise<void> {
+    await db
+      .delete(billingAdjustments)
+      .where(and(eq(billingAdjustments.id, id), eq(billingAdjustments.tenantId, tenantId)));
   }
 
   // Invoice operations
@@ -1409,7 +1529,7 @@ export class DatabaseStorage implements IStorage {
   async updatePhoneNumberMapping(id: string, tenantId: string, updates: Partial<PhoneNumberMapping>): Promise<PhoneNumberMapping> {
     return await withDatabaseRetry(async () => {
       // Whitelist safe fields to prevent tenant ownership transfer
-      const safeFields = ['botId', 'webhookUrl', 'isActive'] as const;
+      const safeFields = ['botId', 'webhookUrl', 'isActive', 'numberSid'] as const;
       const safeUpdates: Partial<PhoneNumberMapping> = {};
       
       for (const field of safeFields) {

@@ -177,6 +177,28 @@ export const invoices = pgTable("invoices", {
   updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
 
+// Billing adjustments (discounts, extra minutes)
+export const billingAdjustmentTypeEnum = pgEnum('billing_adjustment_type', [
+  'discount_percent',
+  'discount_fixed_cents',
+  'extra_free_minutes'
+]);
+
+export const billingAdjustments = pgTable("billing_adjustments", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
+  type: billingAdjustmentTypeEnum("type").notNull(),
+  valuePercent: integer("value_percent"),
+  valueCents: integer("value_cents"),
+  valueMinutes: integer("value_minutes"),
+  minuteScope: varchar("minute_scope", { length: 20 }),
+  effectiveFrom: timestamp("effective_from"),
+  effectiveTo: timestamp("effective_to"),
+  appliesToPeriod: varchar("applies_to_period", { length: 7 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
+});
+
 // Support tickets table
 export const supportTickets = pgTable("support_tickets", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -291,6 +313,7 @@ export const tenantSettings = pgTable("tenant_settings", {
   defaultLocale: varchar("default_locale", { length: 10 }).notNull().default('de-AT'),
   // Template variables for dynamic content
   templateVariables: jsonb("template_variables"),
+  emailTemplates: jsonb("email_templates"),
   // Billing package
   billingPackageId: uuid("billing_package_id").references(() => subscriptionPlans.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -325,6 +348,7 @@ export const tenantSecrets = pgTable("tenant_secrets", {
 export const phoneNumberMappings = pgTable("phone_number_mappings", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   phoneNumber: varchar("phone_number", { length: 50 }).notNull(),
+  numberSid: varchar("number_sid", { length: 64 }),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
   botId: uuid("bot_id").references(() => bots.id),
   webhookUrl: varchar("webhook_url", { length: 500 }),
@@ -697,3 +721,5 @@ export type InsertPhoneNumberMapping = z.infer<typeof insertPhoneNumberMappingSc
 export type UpdatePhoneNumberMapping = z.infer<typeof updatePhoneNumberMappingSchema>;
 export type DemoVerificationCode = typeof demoVerificationCodes.$inferSelect;
 export type InsertDemoVerificationCode = z.infer<typeof insertDemoVerificationCodeSchema>;
+export type BillingAdjustment = typeof billingAdjustments.$inferSelect;
+export type InsertBillingAdjustment = typeof billingAdjustments.$inferInsert;

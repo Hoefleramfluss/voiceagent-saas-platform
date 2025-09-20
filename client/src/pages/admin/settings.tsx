@@ -15,12 +15,15 @@ export default function AdminSettings() {
   useEffect(()=>{
     if (user?.tenantId) {
       setTenantId(user.tenantId);
-      apiRequest(`/api/admin/email-templates/${user.tenantId}`).then(r=>r.json()).then((d)=> setTpl(d || { onboarding: {} })).catch(()=>{});
+      apiRequest('GET', `/api/admin/email-templates/${user.tenantId}`)
+        .then((res) => res.json())
+        .then((d) => setTpl(d || { onboarding: {} }))
+        .catch(() => {});
     }
   }, [user]);
 
   const save = async () => {
-    await apiRequest(`/api/admin/email-templates/${tenantId}`, { method: 'PUT', body: JSON.stringify(tpl) });
+    await apiRequest('PUT', `/api/admin/email-templates/${tenantId}`, tpl);
     alert('Templates gespeichert');
   };
 

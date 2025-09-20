@@ -11,12 +11,23 @@ export default function RetellEditor() {
   const [agentId, setAgentId] = useState<string>('');
   const [agentJson, setAgentJson] = useState<string>('');
 
-  useEffect(()=>{ apiRequest('/api/retell/agents').then(r=>r.json()).then(setAgents); }, []);
-  useEffect(()=>{ if(agentId){ apiRequest(`/api/retell/agent/${agentId}`).then(r=>r.json()).then(d=> setAgentJson(JSON.stringify(d, null, 2))); } }, [agentId]);
+  useEffect(() => {
+    apiRequest('GET', '/api/retell/agents')
+      .then((res) => res.json())
+      .then(setAgents)
+      .catch(() => setAgents([]));
+  }, []);
+  useEffect(() => {
+    if (agentId) {
+      apiRequest('GET', `/api/retell/agent/${agentId}`)
+        .then((res) => res.json())
+        .then((data) => setAgentJson(JSON.stringify(data, null, 2)));
+    }
+  }, [agentId]);
 
   const save = async () => {
     const body = JSON.parse(agentJson || '{}');
-    await apiRequest(`/api/retell/agents/${agentId}`, { method: 'PATCH', body: JSON.stringify(body) });
+    await apiRequest('PATCH', `/api/retell/agents/${agentId}`, body);
     alert('Agent aktualisiert');
   };
 

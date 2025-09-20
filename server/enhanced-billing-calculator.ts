@@ -82,11 +82,32 @@ export class EnhancedBillingCalculator {
     // Summarize usage by kind
     const usageSummary = this.summarizeUsage(usageEvents);
     
+    let extraVoiceFree = 0;
+    let extraForwardFree = 0;
+    if (plan) {
+      const adjustments = await storage.getBillingAdjustments(tenantId, { from: periodStart, to: periodEnd });
+      for (const adjustment of adjustments) {
+        if (adjustment.type === 'extra_free_minutes') {
+          const minutes = adjustment.valueMinutes || 0;
+          if (adjustment.minuteScope === 'voice') {
+            extraVoiceFree += minutes;
+          } else if (adjustment.minuteScope === 'forwarding') {
+            extraForwardFree += minutes;
+          } else {
+            extraVoiceFree += minutes;
+            extraForwardFree += minutes;
+          }
+        }
+      }
+    }
+
+    const additionalFree = { voice: extraVoiceFree, forwarding: extraForwardFree };
+
     // Calculate line items with subscription plan logic
-    const lineItems = this.calculateEnhancedLineItems(usageSummary, plan);
-    
+    const lineItems = this.calculateEnhancedLineItems(usageSummary, plan, additionalFree);
+
     // Calculate minute breakdown for display
-    const minuteBreakdown = this.calculateMinuteBreakdown(usageSummary, plan);
+    const minuteBreakdown = this.calculateMinuteBreakdown(usageSummary, plan, additionalFree);
     
     // Calculate totals in cents
     const subtotalCents = lineItems.reduce((sum, item) => sum + item.totalAmountCents, 0);
@@ -136,8 +157,9 @@ export class EnhancedBillingCalculator {
    * Calculate line items with subscription plan logic including free minute deductions
    */
   private calculateEnhancedLineItems(
-    usageSummary: UsageSummary, 
-    plan: SubscriptionPlan | null
+    usageSummary: UsageSummary,
+    plan: SubscriptionPlan | null,
+    additionalFree?: { voice: number; forwarding: number }
   ): EnhancedBillingLineItem[] {
     const lineItems: EnhancedBillingLineItem[] = [];
     
@@ -155,7 +177,7 @@ export class EnhancedBillingCalculator {
 
       // Handle voice bot minutes with free allowance
       const voiceBotMinutesUsed = usageSummary.voice_bot_minute;
-      const freeVoiceBotMinutes = plan.freeVoiceBotMinutes || 0;
+      const freeVoiceBotMinutes = (plan.freeVoiceBotMinutes || 0) + (additionalFree?.voice || 0);
       const voiceBotOverage = Math.max(0, voiceBotMinutesUsed - freeVoiceBotMinutes);
       
       if (voiceBotOverage > 0) {
@@ -174,7 +196,7 @@ export class EnhancedBillingCalculator {
 
       // Handle forwarding minutes with free allowance
       const forwardingMinutesUsed = usageSummary.forwarding_minute;
-      const freeForwardingMinutes = plan.freeForwardingMinutes || 0;
+      const freeForwardingMinutes = (plan.freeForwardingMinutes || 0) + (additionalFree?.forwarding || 0);
       const forwardingOverage = Math.max(0, forwardingMinutesUsed - freeForwardingMinutes);
       
       if (forwardingOverage > 0) {
@@ -270,11 +292,14 @@ export class EnhancedBillingCalculator {
    * Calculate minute usage breakdown for display purposes
    */
   private calculateMinuteBreakdown(
-    usageSummary: UsageSummary, 
-    plan: SubscriptionPlan | null
+    usageSummary: UsageSummary,
+    plan: SubscriptionPlan | null,
+    additionalFree?: { voice: number; forwarding: number }
   ): EnhancedBillingCalculation['minuteBreakdown'] {
-    const freeVoiceBotMinutes = plan?.freeVoiceBotMinutes || 0;
-    const freeForwardingMinutes = plan?.freeForwardingMinutes || 0;
+    const baseVoice = plan?.freeVoiceBotMinutes || 0;
+    const baseForwarding = plan?.freeForwardingMinutes || 0;
+    const freeVoiceBotMinutes = baseVoice + (additionalFree?.voice || 0);
+    const freeForwardingMinutes = baseForwarding + (additionalFree?.forwarding || 0);
     const voiceBotRate = plan?.voiceBotRatePerMinuteCents || DEFAULT_MINUTE_RATES.voice_bot_rate_per_minute_cents;
     const forwardingRate = plan?.forwardingRatePerMinuteCents || DEFAULT_MINUTE_RATES.forwarding_rate_per_minute_cents;
 
