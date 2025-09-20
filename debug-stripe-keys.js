@@ -92,10 +92,6 @@ async function main() {
   console.log('Master key length:', masterKey.length);
   console.log('Master key preview:', masterKey.substring(0, 10) + '...');
   
-  // Test values from database
-  const storedPublicKey = 'sk_test_51S7HPOGnOdlvgsIEHgmqBIshpehEYiuqR3sApNn8pyWV3KAFU8cCpJhY8ghAxXwcoMmEzwajfr3RmIHBmJL2ucwP00w08MEFff';
-  const storedSecretKey = 'rk_test_51S7HPOGnOdlvgsIE67FEu5t5HpnfVHGcnqJzkoNLZUQQr0SdPYd3MWhmH6gOR6j4GrtBMRRdJncTsCpdSZ7ptsJF00MfHfe4Mq';
-  
   console.log('\n📊 Database Analysis:');
   console.log('STRIPE_PUBLIC_KEY stored value prefix:', storedPublicKey.substring(0, 15));
   console.log('STRIPE_SECRET_KEY stored value prefix:', storedSecretKey.substring(0, 15));
