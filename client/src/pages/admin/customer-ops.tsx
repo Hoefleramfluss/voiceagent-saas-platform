@@ -310,10 +310,10 @@ function CustomerOpsPageContent() {
                     </CardHeader>
                     <CardContent>
                       <div className="text-2xl font-bold">
-                        {billingOverview?.balance.runningBalanceFormatted || "€0.00"}
+                        {billingOverview?.balance?.runningBalanceFormatted || "€0.00"}
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Running balance (cents: {billingOverview?.balance.runningBalanceCents || 0})
+                        Running balance (cents: {billingOverview?.balance?.runningBalanceCents || 0})
                       </p>
                     </CardContent>
                   </Card>
