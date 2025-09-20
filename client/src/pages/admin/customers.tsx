@@ -6,23 +6,25 @@ import type { TenantsResponse } from "@shared/api-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Users, Building, Calendar, MoreHorizontal } from "lucide-react";
+import { Plus, Users, Building, Calendar, MoreHorizontal, CreditCard } from "lucide-react";
 
 interface CreateTenantData {
   name: string;
   email: string;
+  createStripeCustomer?: boolean;
 }
 
 function AdminCustomersContent() {
   const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [newTenant, setNewTenant] = useState<CreateTenantData>({ name: "", email: "" });
+  const [newTenant, setNewTenant] = useState<CreateTenantData>({ name: "", email: "", createStripeCustomer: true });
 
   const { data: tenants, isLoading } = useQuery<TenantsResponse>({
     queryKey: ["/api/tenants"],
@@ -36,7 +38,7 @@ function AdminCustomersContent() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tenants"] });
       setIsCreateOpen(false);
-      setNewTenant({ name: "", email: "" });
+      setNewTenant({ name: "", email: "", createStripeCustomer: true });
       toast({
         title: "Customer created",
         description: "New customer has been successfully added.",
@@ -120,6 +122,18 @@ function AdminCustomersContent() {
                       required
                       data-testid="input-tenant-email"
                     />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="stripe-customer"
+                      checked={newTenant.createStripeCustomer}
+                      onCheckedChange={(checked) => setNewTenant({ ...newTenant, createStripeCustomer: checked as boolean })}
+                      data-testid="checkbox-stripe-customer"
+                    />
+                    <Label htmlFor="stripe-customer" className="text-sm flex items-center">
+                      <CreditCard className="w-4 h-4 mr-2" />
+                      Create Stripe customer (recommended)
+                    </Label>
                   </div>
                   <div className="flex justify-end space-x-2">
                     <Button

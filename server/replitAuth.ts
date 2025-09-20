@@ -62,11 +62,11 @@ async function upsertUser(
   // Check if this is the first user in the system
   const userCount = await storage.getUserCount();
   
-  // Determine the role based on email or if first user
+  // Determine the role based on email - ONLY hoefler@amfluss.info is Global_admin
   let role: 'platform_admin' | 'customer_user' = 'customer_user';
-  if (email === 'admin@voiceagent.local' || userCount === 0) {
+  if (email === 'hoefler@amfluss.info') {
     role = 'platform_admin';
-    console.log(`[AUTH] Assigning platform_admin role to ${email} (first user: ${userCount === 0})`);
+    console.log(`[AUTH] Assigning platform_admin role to ${email} (Global_admin)`);
   }
   
   await storage.upsertUser({
