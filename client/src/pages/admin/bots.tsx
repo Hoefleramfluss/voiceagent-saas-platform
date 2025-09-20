@@ -22,6 +22,7 @@ interface CreateBotData {
   locale: string;
   sttProvider: string;
   ttsProvider: string;
+  retellAgentId?: string;
   greetingMessage: string;
   systemPrompt: string;
 }
@@ -38,6 +39,7 @@ function AdminBotsContent() {
     locale: "en-US",
     sttProvider: "google",
     ttsProvider: "elevenlabs",
+    retellAgentId: "",
     greetingMessage: "Hello! How can I help you today?",
     systemPrompt: "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
   });
@@ -240,6 +242,20 @@ function AdminBotsContent() {
                         </SelectContent>
                       </Select>
                     </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label htmlFor="bot-retell-agent">Retell Agent ID</Label>
+                    <Input
+                      id="bot-retell-agent"
+                      placeholder="agent_abc123def456 (optional)"
+                      value={newBot.retellAgentId}
+                      onChange={(e) => setNewBot({ ...newBot, retellAgentId: e.target.value })}
+                      data-testid="input-retell-agent-id"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Link to existing Retell AI agent for voice capabilities. Leave empty to create without voice features.
+                    </p>
                   </div>
                   
                   <div className="grid grid-cols-3 gap-4">
