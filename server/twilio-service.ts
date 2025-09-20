@@ -255,3 +255,40 @@ class TwilioService {
 }
 
 export const twilioService = new TwilioService();
+// Summe der weitergeleiteten Minuten für eine Nummer im Zeitraum
+export async function fetchForwardingMinutes(options: { numberSid: string; periodStart: Date; periodEnd: Date }): Promise<{ totalSeconds: number; calls: any[] }> {
+  // @ts-ignore
+  const client = await this.getTwilioClient ? this.getTwilioClient() : (await (await import('twilio')).default(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN));
+  const calls = await client.calls.list({ startTimeAfter: options.periodStart, endTimeBefore: options.periodEnd, status: 'completed', limit: 500 });
+  const related = calls.filter((c: any) => c.phoneNumberSid === options.numberSid);
+  const totalSeconds = related.reduce((s: number, c: any) => s + (c.duration ? parseInt(c.duration) : 0), 0);
+  return { totalSeconds, calls: related };
+}
+
+// Monatsimport (idempotent) für alle zugeordneten Nummern eines Tenants
+export async function importForwardingForTenantPeriod(tenantId: string, periodStart: Date, periodEnd: Date): Promise<{ minutes: number }> {
+  const mappings = await storage.getPhoneNumberMappings(tenantId);
+  let totalSec = 0;
+  for (const m of mappings) {
+    if (!m.numberSid) continue;
+    const res = await fetchForwardingMinutes({ numberSid: m.numberSid, periodStart, periodEnd });
+    totalSec += res.totalSeconds;
+  }
+  const periodKey = periodStart.toISOString().slice(0,7);
+  const events = await storage.getUsageEvents(tenantId, { periodStart, periodEnd });
+  for (const ev of events) {
+    if (ev.kind === 'forwarding_minute' && ev.metadata?.source === 'twilio_import' && ev.metadata?.period === periodKey) {
+      await storage.deleteUsageEvent(ev.id);
+    }
+  }
+  const minutes = Math.round(totalSec/60);
+  const bots = await storage.getBots(tenantId);
+  const botId = bots[0]?.id;
+  if (minutes > 0 && botId) {
+    await storage.createUsageEvent({
+      tenantId, botId, kind: 'forwarding_minute' as any, quantity: minutes as any,
+      metadata: { source: 'twilio_import', period: periodKey }, timestamp: new Date()
+    });
+  }
+  return { minutes };
+}

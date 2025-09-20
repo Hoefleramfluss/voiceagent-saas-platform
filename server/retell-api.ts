@@ -1,3 +1,4 @@
+import { getRetellKey } from "./key-loader";
 /**
  * Retell AI API Integration Service
  * Provides direct integration with Retell AI for agent management
