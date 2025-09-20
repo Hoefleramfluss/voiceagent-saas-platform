@@ -226,7 +226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(applyWAFRules);                   // WAF rules before other processing
   
   // Apply tenant scope detection to authenticated routes
-  app.use('/api', detectTenantScopeViolations);
+  // MOVED: detectTenantScopeViolations now applied per-route after requireAuth
 
   // Enterprise security metrics endpoints
   app.get("/api/admin/security/metrics", 
