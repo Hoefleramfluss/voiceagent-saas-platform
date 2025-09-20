@@ -1254,7 +1254,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/tenants", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
       const validation = insertTenantSchema.extend({
-        email: z.string().email("Valid email address required")
+        email: z.string().email("Valid email address required"),
+        createStripeCustomer: z.boolean().optional()
       }).safeParse(req.body);
       
       if (!validation.success) {
