@@ -17,14 +17,28 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Bot, Activity, AlertCircle, CheckCircle, Clock, Zap, Edit } from "lucide-react";
 
 interface CreateBotData {
-  name: string;
   tenantId: string;
-  locale: string;
-  sttProvider: string;
-  ttsProvider: string;
-  retellAgentId?: string;
-  greetingMessage: string;
-  systemPrompt: string;
+  retellAgentId: string;
+}
+
+interface RetellAgentDetails {
+  agent_id: string;
+  agent_name: string;
+  voice_id: string;
+  language: string;
+  voice_temperature?: number;
+  voice_speed?: number;
+  voice_model?: string;
+  response_engine: {
+    type: string;
+    llm_websocket_url?: string;
+  };
+  llm_websocket_url?: string;
+  webhook_url?: string;
+  boosted_keywords?: string[];
+  enable_backchannel?: boolean;
+  ambient_sound?: string;
+  last_modification_timestamp?: number;
 }
 
 function AdminBotsContent() {
@@ -34,15 +48,53 @@ function AdminBotsContent() {
   const [editingBot, setEditingBot] = useState<any>(null);
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const [newBot, setNewBot] = useState<CreateBotData>({
-    name: "",
     tenantId: "",
-    locale: "en-US",
-    sttProvider: "google",
-    ttsProvider: "elevenlabs",
-    retellAgentId: "",
-    greetingMessage: "Hello! How can I help you today?",
-    systemPrompt: "You are a helpful AI assistant. Be polite, professional, and assist users with their inquiries to the best of your ability."
+    retellAgentId: ""
   });
+  
+  const [agentDetails, setAgentDetails] = useState<RetellAgentDetails | null>(null);
+  const [loadingAgent, setLoadingAgent] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+
+  // Load agent details from Retell when Agent ID changes
+  const loadAgentDetails = async (agentId: string) => {
+    if (!agentId.trim()) {
+      setAgentDetails(null);
+      setAgentError(null);
+      return;
+    }
+
+    setLoadingAgent(true);
+    setAgentError(null);
+
+    try {
+      const res = await fetch(`/api/retell/agent/${agentId}`);
+      const data = await res.json();
+
+      if (data.success) {
+        setAgentDetails(data.agent);
+      } else {
+        setAgentError(data.message || 'Failed to load agent details');
+        setAgentDetails(null);
+      }
+    } catch (error) {
+      setAgentError('Failed to connect to Retell API');
+      setAgentDetails(null);
+    } finally {
+      setLoadingAgent(false);
+    }
+  };
+
+  // Auto-load agent details when Agent ID changes (with debounce)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (newBot.retellAgentId) {
+        loadAgentDetails(newBot.retellAgentId);
+      }
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [newBot.retellAgentId]);
 
   const { data: tenants } = useQuery<TenantsResponse>({
     queryKey: ["/api/tenants"],
@@ -129,7 +181,28 @@ function AdminBotsContent() {
       });
       return;
     }
-    createBotMutation.mutate(newBot);
+    if (!newBot.retellAgentId) {
+      toast({
+        title: "Error", 
+        description: "Please enter a Retell Agent ID.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Create bot with Retell agent details
+    const botData = {
+      tenantId: newBot.tenantId,
+      retellAgentId: newBot.retellAgentId,
+      name: agentDetails?.agent_name || `Retell Agent ${newBot.retellAgentId}`,
+      locale: agentDetails?.language || 'en-US',
+      sttProvider: 'retell', // Use Retell for everything
+      ttsProvider: 'retell', // Use Retell for everything  
+      greetingMessage: 'Connected via Retell AI',
+      systemPrompt: 'This bot is managed entirely through Retell AI. All configuration should be done in the Retell dashboard.'
+    };
+    
+    createBotMutation.mutate(botData);
   };
 
   const handleEditBot = (bot: any) => {
@@ -211,54 +284,90 @@ function AdminBotsContent() {
                     Configure a new VoiceBot for a customer. This will trigger automatic provisioning.
                   </DialogDescription>
                 </DialogHeader>
-                <form onSubmit={handleCreateBot} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="bot-name">Bot Name</Label>
-                      <Input
-                        id="bot-name"
-                        placeholder="Customer Support Bot"
-                        value={newBot.name}
-                        onChange={(e) => setNewBot({ ...newBot, name: e.target.value })}
-                        required
-                        data-testid="input-bot-name"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="bot-customer">Customer</Label>
-                      <Select
-                        value={newBot.tenantId}
-                        onValueChange={(value) => setNewBot({ ...newBot, tenantId: value })}
-                      >
-                        <SelectTrigger data-testid="select-customer">
-                          <SelectValue placeholder="Select customer" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {tenants?.map((tenant: any) => (
-                            <SelectItem key={tenant.id} value={tenant.id}>
-                              {tenant.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  
+                <form onSubmit={handleCreateBot} className="space-y-6">
+                  {/* Retell Agent ID Input */}
                   <div className="space-y-2">
-                    <Label htmlFor="bot-retell-agent">Retell Agent ID</Label>
+                    <Label htmlFor="retell-agent-id">Retell Agent ID *</Label>
                     <Input
-                      id="bot-retell-agent"
-                      placeholder="agent_abc123def456 (optional)"
+                      id="retell-agent-id"
+                      placeholder="agent_abc123def456..."
                       value={newBot.retellAgentId}
                       onChange={(e) => setNewBot({ ...newBot, retellAgentId: e.target.value })}
+                      required
                       data-testid="input-retell-agent-id"
                     />
                     <p className="text-sm text-muted-foreground">
-                      Link to existing Retell AI agent for voice capabilities. Leave empty to create without voice features.
+                      Enter your Retell AI agent ID. All settings will be loaded automatically from Retell.
                     </p>
+                    
+                    {/* Loading indicator */}
+                    {loadingAgent && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <div className="w-4 h-4 border-2 border-muted border-t-foreground rounded-full animate-spin"></div>
+                        Loading agent details...
+                      </div>
+                    )}
+                    
+                    {/* Error display */}
+                    {agentError && (
+                      <div className="text-sm text-destructive">
+                        {agentError}
+                      </div>
+                    )}
                   </div>
+
+                  {/* Customer Selection */}
+                  <div className="space-y-2">
+                    <Label htmlFor="bot-customer">Customer *</Label>
+                    <Select
+                      value={newBot.tenantId}
+                      onValueChange={(value) => setNewBot({ ...newBot, tenantId: value })}
+                    >
+                      <SelectTrigger data-testid="select-customer">
+                        <SelectValue placeholder="Select customer" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {tenants?.map((tenant: any) => (
+                          <SelectItem key={tenant.id} value={tenant.id}>
+                            {tenant.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Agent Details Preview (if loaded) */}
+                  {agentDetails && (
+                    <div className="border rounded-lg p-4 space-y-4">
+                      <h3 className="font-medium text-foreground">Retell Agent Details</h3>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <span className="font-medium">Name:</span> {agentDetails.agent_name}
+                        </div>
+                        <div>
+                          <span className="font-medium">Language:</span> {agentDetails.language}
+                        </div>
+                        <div>
+                          <span className="font-medium">Voice ID:</span> {agentDetails.voice_id}
+                        </div>
+                        <div>
+                          <span className="font-medium">Voice Temperature:</span> {agentDetails.voice_temperature}
+                        </div>
+                        {agentDetails.voice_speed && (
+                          <div>
+                            <span className="font-medium">Voice Speed:</span> {agentDetails.voice_speed}
+                          </div>
+                        )}
+                        {agentDetails.webhook_url && (
+                          <div className="col-span-2">
+                            <span className="font-medium">Webhook:</span> {agentDetails.webhook_url}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="flex justify-end space-x-2">
                     <div className="space-y-2">
                       <Label htmlFor="bot-locale">Language</Label>
                       <Select

@@ -833,6 +833,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/retell/agent/:agentId - Get specific agent details from Retell API
+  app.get("/api/retell/agent/:agentId", requireAuth, requireRole(['platform_admin']), async (req, res) => {
+    try {
+      const { agentId } = req.params;
+      
+      // Import Retell API service
+      const { retellAPI } = await import('./retell-api');
+      
+      // Get agent details from Retell API
+      const agent = await retellAPI.getAgent(agentId);
+      
+      return res.json({
+        success: true,
+        agent: {
+          agent_id: agent.agent_id,
+          agent_name: agent.agent_name,
+          voice_id: agent.voice_id,
+          language: agent.language,
+          voice_temperature: agent.voice_temperature,
+          voice_speed: agent.voice_speed,
+          voice_model: agent.voice_model,
+          response_engine: agent.response_engine,
+          llm_websocket_url: agent.llm_websocket_url,
+          webhook_url: agent.webhook_url,
+          boosted_keywords: agent.boosted_keywords,
+          enable_backchannel: agent.enable_backchannel,
+          ambient_sound: agent.ambient_sound,
+          last_modification_timestamp: agent.last_modification_timestamp
+        }
+      });
+    } catch (error) {
+      console.error('[Retell Agent Details] Error:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch agent details from Retell',
+        message: (error as Error).message
+      });
+    }
+  });
+
   // PATCH /api/retell/agents/:id - Update agent (diff-based)
   app.patch("/api/retell/agents/:id", requireAuth, requireRole(['platform_admin']), async (req, res) => {
     try {
