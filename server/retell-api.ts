@@ -4,8 +4,7 @@
  */
 
 import type { ApiKey } from '@shared/schema';
-
-const keyLoader = await import('./key-loader').then(m => m.keyLoader);
+import { keyLoader } from './key-loader';
 
 export interface RetellAgent {
   agent_id: string;

@@ -188,7 +188,7 @@ class SecureKeyLoader {
   async getRetellSecretKey(): Promise<string | null> {
     // Only use secret keys for server-side operations
     const secretKey = await this.getApiKey('retell', 'RETELL_SECRET_KEY');
-    if (secretKey && secretKey.startsWith('sk_')) {
+    if (secretKey && secretKey.startsWith('key_')) {
       console.log('[KeyLoader] ✅ Using valid Retell secret key from database');
       return secretKey;
     }
@@ -196,11 +196,11 @@ class SecureKeyLoader {
     // Fallback to environment variable (must be secret key)
     if (process.env.RETELL_SECRET_KEY) {
       const envKey = process.env.RETELL_SECRET_KEY;
-      if (envKey.startsWith('sk_')) {
+      if (envKey.startsWith('key_')) {
         console.log('[KeyLoader] ✅ Using valid Retell secret key from environment');
         return envKey;
       } else {
-        console.error(`[KeyLoader] Environment RETELL_SECRET_KEY is not a secret key (should start with 'sk_')`);
+        console.error(`[KeyLoader] Environment RETELL_SECRET_KEY is not a secret key (should start with 'key_')`);
       }
     }
     
