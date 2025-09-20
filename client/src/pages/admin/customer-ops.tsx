@@ -328,11 +328,11 @@ function CustomerOpsPageContent() {
                     </CardHeader>
                     <CardContent>
                       <div className="text-2xl font-bold">
-                        {billingOverview?.usage.totalMinutes || 0}
+                        {billingOverview?.usage?.totalMinutes || 0}
                         <span className="text-sm font-normal text-muted-foreground ml-1">min</span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Cost: {billingOverview?.usage.estimatedCostCents ? `€${(billingOverview.usage.estimatedCostCents / 100).toFixed(2)}` : "€0.00"}
+                        Cost: {billingOverview?.usage?.estimatedCostCents ? `€${(billingOverview.usage.estimatedCostCents / 100).toFixed(2)}` : "€0.00"}
                       </p>
                     </CardContent>
                   </Card>
